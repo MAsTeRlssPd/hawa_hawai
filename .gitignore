@@ -1,0 +1,8 @@
+.aws-sam/
+node_modules/
+**/node_modules/
+.env
+.env.*
+!.env.example
+frontend-config.local.js
+*.log

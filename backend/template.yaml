@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Saans low-cost live air data API (OpenAQ + Open-Meteo)
+Parameters:
+  OpenAqParameterName:
+    Type: String
+    Default: /saans/prod/openaq-api-key
+    Description: SSM SecureString parameter name. Create it after deployment; the API works with model data before then.
+  AllowedOrigin:
+    Type: String
+    Default: '*'
+    Description: Set to the deployed website origin before production use.
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 20
+    Tracing: Active
+    Environment:
+      Variables:
+        CACHE_TABLE: !Ref AirCache
+        OPENAQ_PARAMETER_NAME: !Ref OpenAqParameterName
+Resources:
+  AirCache:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'saans-air-cache-${AWS::StackName}'
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+      AttributeDefinitions:
+        - AttributeName: cacheKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: cacheKey
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      SSESpecification:
+        SSEEnabled: true
+  AirApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      CorsConfiguration:
+        AllowOrigins: [!Ref AllowedOrigin]
+        AllowHeaders: [content-type]
+        AllowMethods: [GET, OPTIONS]
+        MaxAge: 600
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+  AirDataFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AirDataLogGroup
+    Properties:
+      CodeUri: src/
+      Handler: handler.handler
+      FunctionName: !Sub '${AWS::StackName}-air-data'
+      ReservedConcurrentExecutions: 2
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AirCache
+        - Statement:
+            - Effect: Allow
+              Action: [ssm:GetParameter]
+              Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OpenAqParameterName}'
+            - Effect: Allow
+              Action: [kms:Decrypt]
+              Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+      Events:
+        GetAir:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/air
+            Method: GET
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /health
+            Method: GET
+  AirDataLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-air-data'
+      RetentionInDays: 14
+Outputs:
+  ApiBaseUrl:
+    Description: API base URL
+    Value: !Sub 'https://${AirApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/prod'
+  CacheTableName:
+    Value: !Ref AirCache
+  OpenAqParameterName:
+    Value: !Ref OpenAqParameterName
