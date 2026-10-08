@@ -62,7 +62,8 @@ Resources:
       CodeUri: src/
       Handler: handler.handler
       FunctionName: !Sub '${AWS::StackName}-air-data'
-      ReservedConcurrentExecutions: 2
+      # No ReservedConcurrentExecutions: new accounts have a 10-execution limit and AWS rejects any reservation
+      # that leaves fewer than 10 unreserved. API throttling below caps load instead.
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref AirCache

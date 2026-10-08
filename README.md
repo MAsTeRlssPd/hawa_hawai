@@ -26,6 +26,17 @@ Saans now separates OpenAQ station observations from Open-Meteo/CAMS model forec
 
 Saans currently displays PM2.5 concentration in µg/m³. It does **not** calculate or present an official CPCB National AQI. CPCB AQI requires pollutant-specific averages and sub-indices; a PM2.5-only estimate is not sufficient. The displayed spread is a simple estimate range, not a validated confidence interval.
 
+## Run locally (no AWS)
+
+Requires Node.js 22.
+
+```sh
+cd backend/src && npm ci && cd ../..
+node --env-file-if-exists=backend/.env backend/local-server.mjs   # http://localhost:3000
+```
+
+Serves the PWA and runs the Lambda handler in-process. DynamoDB cache is skipped. For OpenAQ stations, put `OPENAQ_API_KEY=...` in `backend/.env` (gitignored); without it only the Open-Meteo forecast is live.
+
 ## Deploy the API
 
 Use an AWS region where Lambda, API Gateway, DynamoDB and Systems Manager Parameter Store are enabled. Mumbai (`ap-south-1`) is the intended default for this project. Before deployment, install the AWS CLI and AWS SAM CLI, configure an AWS profile, and confirm your AWS Budgets alert is set below the remaining credit amount. Credits do not guarantee that every service or data transfer charge is free.

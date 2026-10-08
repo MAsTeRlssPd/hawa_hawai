@@ -22,6 +22,7 @@ async function jsonFetch(url, options = {}) {
 
 async function getOpenAqKey() {
   if (cachedApiKey) return cachedApiKey;
+  if (process.env.OPENAQ_API_KEY) return process.env.OPENAQ_API_KEY; // local dev only; Lambda uses SSM
   if (!PARAMETER_NAME) return null;
   try {
     const parameter = await ssm.send(new GetParameterCommand({ Name: PARAMETER_NAME, WithDecryption: true }));
