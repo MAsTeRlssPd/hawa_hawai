@@ -19,10 +19,13 @@ Saans now separates OpenAQ station observations from Open-Meteo/CAMS model forec
 
 - `backend/template.yaml` deploys an API Gateway HTTP API, Node.js Lambda, low-capacity DynamoDB cache, throttling, and least-purpose IAM access.
 - `GET /health` reports API health.
-- `GET /v1/air?lat=28.5355&lon=77.2420` returns nearby OpenAQ PM2.5 station readings, a weighted PM2.5 estimate, a 48-hour Open-Meteo PM2.5/PM10 forecast, timestamps, provider states, and India-specific CPCB AQI caveats.
+- `GET /v1/air?lat=28.5355&lon=77.2420` returns nearby OpenAQ PM2.5 station readings (older than 7 days dropped, outliers >3× off the local median flagged and excluded), a distance-weighted PM2.5 estimate, a 48-hour Open-Meteo PM2.5/PM10 forecast, live wind (Open-Meteo), the CPCB PM2.5 band with health impact and per-profile actions in English and Hindi, timestamps, provider states, and CPCB AQI caveats.
+- `POST /v1/ask` with `{question, lat, lon, profile, lang, place}` answers questions from the same live data and CPCB guidance. It uses Amazon Bedrock (`BedrockModelId` parameter) when enabled and falls back to deterministic rule-based answers otherwise; the response says which (`mode`).
+- Responses are cached for 5 minutes in DynamoDB and in memory; a payload with a provider outage is cached for only 60 seconds.
 - OpenAQ is optional until you add its key. The forecast endpoint works without it.
 - The dashboard calls the API only after `frontend-config.js` has an API base URL. It does not show sample readings as real data.
-- The assistant is intentionally disabled until cited guidance retrieval and safe response rules exist.
+- Personas are chosen on the name screen: office/indoor, construction/outdoor worker, delivery rider/commuter, runner, child/parent, elderly, pregnant, heart/lung condition. They change the Today alerts, guidance and assistant answers, and stay on the device.
+- The app is split into pages (Today, Overview, Airspace, Guidance, Area watch, More) routed by the URL hash. Today shows notification-style alerts for the persona and the current PM2.5, PM10, NO2, O3, CO and SO2 levels (CAMS model, CPCB breakpoints, indicative) with how each affects that persona.
 
 Saans currently displays PM2.5 concentration in µg/m³. It does **not** calculate or present an official CPCB National AQI. CPCB AQI requires pollutant-specific averages and sub-indices; a PM2.5-only estimate is not sufficient. The displayed spread is a simple estimate range, not a validated confidence interval.
 
@@ -35,7 +38,7 @@ cd backend/src && npm ci && cd ../..
 node --env-file-if-exists=backend/.env backend/local-server.mjs   # http://localhost:3000
 ```
 
-Serves the PWA and runs the Lambda handler in-process. DynamoDB cache is skipped. For OpenAQ stations, put `OPENAQ_API_KEY=...` in `backend/.env` (gitignored); without it only the Open-Meteo forecast is live.
+Serves the PWA and runs the Lambda handler in-process. DynamoDB cache is skipped and the assistant uses rule-based answers unless `BEDROCK_MODEL_ID` and AWS credentials are set. `LIVE_API=1` serves the site against the deployed API instead. `HOST=0.0.0.0` binds IPv4 (needed under WSL for `tailscale serve` or other devices). `node backend/selfcheck.mjs` checks band, outlier and estimate logic. For OpenAQ stations, put `OPENAQ_API_KEY=...` in `backend/.env` (gitignored); without it only the Open-Meteo forecast is live.
 
 ## Deploy the API
 

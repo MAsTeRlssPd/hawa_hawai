@@ -10,6 +10,10 @@ Parameters:
     Type: String
     Default: '*'
     Description: Set to the deployed website origin before production use.
+  BedrockModelId:
+    Type: String
+    Default: apac.amazon.nova-lite-v1:0
+    Description: Bedrock model or inference profile for Ask Saans. Empty string uses the built-in rule-based answers only.
 Globals:
   Function:
     Runtime: nodejs22.x
@@ -21,6 +25,7 @@ Globals:
       Variables:
         CACHE_TABLE: !Ref AirCache
         OPENAQ_PARAMETER_NAME: !Ref OpenAqParameterName
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
 Resources:
   AirCache:
     Type: AWS::DynamoDB::Table
@@ -50,7 +55,7 @@ Resources:
       CorsConfiguration:
         AllowOrigins: [!Ref AllowedOrigin]
         AllowHeaders: [content-type]
-        AllowMethods: [GET, OPTIONS]
+        AllowMethods: [GET, POST, OPTIONS]
         MaxAge: 600
       DefaultRouteSettings:
         ThrottlingBurstLimit: 10
@@ -74,6 +79,12 @@ Resources:
             - Effect: Allow
               Action: [kms:Decrypt]
               Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+            # Cross-region inference profiles route to foundation models in other regions of the same geography.
+            - Effect: Allow
+              Action: [bedrock:InvokeModel]
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*'
+                - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/*'
       Events:
         GetAir:
           Type: HttpApi
@@ -87,6 +98,12 @@ Resources:
             ApiId: !Ref AirApi
             Path: /health
             Method: GET
+        Ask:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/ask
+            Method: POST
   AirDataLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
