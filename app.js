@@ -20,7 +20,7 @@ const PERSONAS = {
   heart_lung: { icon: '❤️', en: ['Heart or lung condition', 'Asthma, COPD, heart disease'], hi: ['हृदय या फेफड़े का रोग', 'अस्थमा, COPD, हृदय रोग'] }
 };
 const PERSONA_KEYS = Object.keys(PERSONAS);
-const PAGE_IDS = ['today', 'overview', 'airspace', 'guidance', 'area-watch', 'more'];
+const PAGE_IDS = ['today', 'overview', 'airspace', 'guidance', 'health', 'area-watch', 'more'];
 let selectedLocation = DEFAULT_LOCATION;
 let deferredInstallPrompt;
 let lastData = null;
@@ -44,12 +44,25 @@ const UI = {
     pollutantAlert: (name, level) => `${name} is ${level.toLowerCase()} right now`, modelNote: 'No recent monitor nearby, so this is a model estimate. Treat it as a rough guide.',
     loading: 'Loading the air around you…', seeGuidance: 'Full guidance →',
     pollutantsTitle: 'What is in your air, and how it affects you', pollutantsNote: 'Current model hour from CAMS; PM2.5 uses the Saans estimate. Levels use CPCB breakpoints and are indicative.', affectsYou: 'Affects you more',
+    tempL: 'Temperature', humidL: 'Humidity', blhL: 'Mixing height', viL: 'Ventilation', vi: { good: 'Disperses', low: 'Weak mixing', poor: 'Stagnant' },
+    viExplain: 'Ventilation = wind speed × mixing height. Below 6000 m²/s with light wind, pollution stays near the ground (IMD).', wxKicker: 'LIVE WEATHER · OPEN-METEO',
+    stagnant: blh => `Air is stagnant: the mixing layer is only ~${blh} m deep`, stagnantBody: (vi, at) => `Ventilation is ${vi} m²/s, below 6000, so pollution stays close to the ground.${at ? ` The air should mix best around ${at}.` : ''}`,
+    firesUp: n => `${n} fire${n === 1 ? '' : 's'} upwind in the last 24 hours`, firesUpBody: (states, km, dir) => `Mostly ${states}; nearest ~${km} km. Wind from the ${dir} can carry their smoke here. See Area watch.`,
+    fireKicker: 'NASA FIRMS · VIIRS 375 m · NEAR REAL TIME', fireTitle: 'Fires, and where your air comes from', days: d => `${d} day${d > 1 ? 's' : ''}`,
+    wedge: 'Upwind zone · 500 km', fireNotConfigured: 'Fire hotspots need a free NASA FIRMS MAP_KEY on the server. The upwind zone is live.', fireUnavailable: 'Fire data is unavailable right now.',
+    fireTotal: (n, shown) => `${n.toLocaleString('en-IN')} fire detections in India and border areas${shown < n ? ` · strongest ${shown.toLocaleString('en-IN')} shown` : ''}`,
+    fireUp: (n, km) => n ? `${n} upwind in the last 24 h · nearest ${km} km` : 'No fires upwind in the last 24 h', byState: 'Detections by state', frp: 'Fire power (FRP)',
+    histKicker: 'PAST WEATHER · ERA5 + CAMS', histTitle: d => `The last ${d} days`, histLoading: 'Loading past weather…', histFailed: 'Past weather is unavailable right now.', csv: '⤓ CSV',
+    histBacktest: (n, total, poor, good) => `The air was stagnant (peak ventilation under 6000 m²/s) on ${n} of ${total} days. Model PM2.5 averaged ${poor ?? '—'} µg/m³ on those days and ${good ?? '—'} µg/m³ on the rest.`,
+    histCorr: r => `Correlation between ventilation and PM2.5: ${r}. Rain and wind direction also matter, so this is a pattern, not proof.`, histLegend: ['Daily PM2.5 (CAMS model)', 'Peak ventilation (ERA5)'],
+    searchPlaceholder: 'Search any Indian locality…', noResults: 'No places found', cities: 'CITIES', results: 'PLACES', deviceLocation: 'Shared device location', mapFoot: 'Colour = CPCB PM2.5 band', mapNote: 'NUMBERS MATCH THE LIST',
     pages: {
       today: { kicker: 'TODAY FOR YOU', title: name => `Hi ${name}, here is your air today`, desc: 'Alerts and steps for the person you are planning for, from live data.' },
       overview: { kicker: 'YOUR NEIGHBOURHOOD', title: () => 'Overview', desc: 'The current PM2.5 estimate and the next hours from the model.' },
       airspace: { kicker: 'THE NETWORK', title: () => 'Airspace', desc: 'Nearby monitors, how fresh they are, and where they sit around you.' },
       guidance: { kicker: 'MADE FOR YOUR DAY', title: () => 'Guidance that makes sense', desc: 'CPCB health impact and practical steps for your persona.' },
-      'area-watch': { kicker: 'BEYOND YOUR STREET', title: () => 'Area watch', desc: 'Live wind for your area, and how smoke can move across the region.' },
+      health: { kicker: 'YOUR BODY AND THIS AIR', title: () => 'Health', desc: 'Where each pollutant lands in your lungs, what it does within hours, and what years of breathing it can cause.' },
+      'area-watch': { kicker: 'BEYOND YOUR STREET', title: () => 'Area watch', desc: 'Live wind, how well the air is mixing, and NASA fire hotspots that could send smoke your way.' },
       more: { kicker: 'YOUR SAANS', title: () => 'More', desc: 'Set up Saans the way you like it, or find a quick guide to getting started.' } } },
   hi: { bandSuffix: 'CPCB PM2.5 श्रेणी · संकेतात्मक', guidanceKicker: 'आज के लिए सलाह', forWho: 'क्या करें', cpcbSays: 'CPCB के अनुसार स्वास्थ्य प्रभाव', cleanest: 'अगले 24 घंटों में सबसे साफ़ समय (मॉडल)',
     profileKicker: 'आपकी पहचान', profileTitle: 'आप किसके लिए योजना बना रहे हैं?', profileBody: 'Saans इसी व्यक्ति के अनुसार अलर्ट, सलाह और उत्तर देता है। यह चुनाव इसी डिवाइस पर रहता है।',
@@ -65,12 +78,25 @@ const UI = {
     pollutantAlert: (name, level) => `${name} अभी ${level} स्तर पर है`, modelNote: 'पास में हाल का मॉनिटर नहीं है, इसलिए यह मॉडल अनुमान है। इसे मोटा अंदाज़ा मानें।',
     loading: 'आपके आसपास की हवा लोड हो रही है…', seeGuidance: 'पूरी सलाह →',
     pollutantsTitle: 'आपकी हवा में क्या है, और इसका आप पर असर', pollutantsNote: 'CAMS मॉडल का मौजूदा घंटा; PM2.5 Saans अनुमान है। स्तर CPCB सीमाओं पर आधारित और संकेतात्मक हैं।', affectsYou: 'आप पर ज़्यादा असर',
+    tempL: 'तापमान', humidL: 'नमी', blhL: 'मिश्रण परत', viL: 'वेंटिलेशन', vi: { good: 'फैल रहा है', low: 'कमज़ोर मिश्रण', poor: 'रुकी हुई हवा' },
+    viExplain: 'वेंटिलेशन = हवा की गति × मिश्रण परत की ऊँचाई। धीमी हवा के साथ 6000 m²/s से कम होने पर प्रदूषण ज़मीन के पास रुका रहता है (IMD)।', wxKicker: 'लाइव मौसम · OPEN-METEO',
+    stagnant: blh => `हवा रुकी हुई है: मिश्रण परत सिर्फ़ ~${blh} m गहरी है`, stagnantBody: (vi, at) => `वेंटिलेशन ${vi} m²/s है, 6000 से कम, इसलिए प्रदूषण ज़मीन के पास रहता है।${at ? ` हवा ${at} के आसपास सबसे अच्छी तरह मिलेगी।` : ''}`,
+    firesUp: n => `पिछले 24 घंटों में हवा की दिशा में ${n} आग`, firesUpBody: (states, km, dir) => `ज़्यादातर ${states}; सबसे पास ~${km} km। ${dir} से आती हवा उनका धुआँ यहाँ ला सकती है। क्षेत्र पर नज़र देखें।`,
+    fireKicker: 'NASA FIRMS · VIIRS 375 m · लगभग रियल टाइम', fireTitle: 'आग, और आपकी हवा कहाँ से आती है', days: d => `${d} दिन`,
+    wedge: 'हवा आने का क्षेत्र · 500 km', fireNotConfigured: 'आग के स्थान दिखाने के लिए सर्वर पर मुफ़्त NASA FIRMS MAP_KEY चाहिए। हवा का क्षेत्र लाइव है।', fireUnavailable: 'आग का डेटा अभी उपलब्ध नहीं है।',
+    fireTotal: (n, shown) => `भारत और सीमा क्षेत्रों में ${n.toLocaleString('en-IN')} आग दर्ज${shown < n ? ` · सबसे तेज़ ${shown.toLocaleString('en-IN')} दिखाई गईं` : ''}`,
+    fireUp: (n, km) => n ? `पिछले 24 घंटों में हवा की दिशा में ${n} · सबसे पास ${km} km` : 'पिछले 24 घंटों में हवा की दिशा में कोई आग नहीं', byState: 'राज्य के अनुसार', frp: 'आग की ताक़त (FRP)',
+    histKicker: 'पिछला मौसम · ERA5 + CAMS', histTitle: d => `पिछले ${d} दिन`, histLoading: 'पिछला मौसम लोड हो रहा है…', histFailed: 'पिछला मौसम अभी उपलब्ध नहीं है।', csv: '⤓ CSV',
+    histBacktest: (n, total, poor, good) => `${total} में से ${n} दिन हवा रुकी रही (अधिकतम वेंटिलेशन 6000 m²/s से कम)। उन दिनों मॉडल PM2.5 औसत ${poor ?? '—'} µg/m³ और बाकी दिनों ${good ?? '—'} µg/m³ रहा।`,
+    histCorr: r => `वेंटिलेशन और PM2.5 का सहसंबंध: ${r}। बारिश और हवा की दिशा का भी असर होता है, इसलिए यह एक पैटर्न है, प्रमाण नहीं।`, histLegend: ['रोज़ का PM2.5 (CAMS मॉडल)', 'अधिकतम वेंटिलेशन (ERA5)'],
+    searchPlaceholder: 'भारत का कोई भी इलाका खोजें…', noResults: 'कोई जगह नहीं मिली', cities: 'शहर', results: 'जगहें', deviceLocation: 'डिवाइस का स्थान', mapFoot: 'रंग = CPCB PM2.5 श्रेणी', mapNote: 'नंबर सूची से मेल खाते हैं',
     pages: {
       today: { kicker: 'आज आपके लिए', title: name => `नमस्ते ${name}, आज आपकी हवा ऐसी है`, desc: 'लाइव डेटा से आपके चुने व्यक्ति के लिए अलर्ट और कदम।' },
       overview: { kicker: 'आपका इलाका', title: () => 'सारांश', desc: 'मौजूदा PM2.5 अनुमान और मॉडल के अनुसार अगले घंटे।' },
       airspace: { kicker: 'नेटवर्क', title: () => 'वायु क्षेत्र', desc: 'आसपास के मॉनिटर, उनका डेटा कितना ताज़ा है, और वे कहाँ हैं।' },
       guidance: { kicker: 'आपके दिन के लिए', title: () => 'काम की सलाह', desc: 'CPCB स्वास्थ्य प्रभाव और आपके लिए व्यावहारिक कदम।' },
-      'area-watch': { kicker: 'आपकी गली से आगे', title: () => 'क्षेत्र पर नज़र', desc: 'आपके इलाके की लाइव हवा, और धुआँ कैसे फैल सकता है।' },
+      health: { kicker: 'आपका शरीर और यह हवा', title: () => 'सेहत', desc: 'हर प्रदूषक फेफड़ों में कहाँ पहुँचता है, घंटों में क्या करता है, और सालों तक साँस लेने से क्या हो सकता है।' },
+      'area-watch': { kicker: 'आपकी गली से आगे', title: () => 'क्षेत्र पर नज़र', desc: 'लाइव हवा, हवा कितनी मिल रही है, और NASA के आग वाले स्थान जिनका धुआँ आप तक आ सकता है।' },
       more: { kicker: 'आपका SAANS', title: () => 'और', desc: 'Saans की सेटिंग बदलें या इस्तेमाल करने का तरीका जानें।' } } }
 };
 const ui = () => UI[currentLanguage] || UI.en;
@@ -105,16 +131,21 @@ function buildPages() {
   profileCard.className = 'card profile-guidance-card';
   const windCard = document.createElement('article');
   windCard.className = 'card wind-card';
-  const smoke = document.createElement('article');
-  smoke.className = 'card smoke-card';
-  smoke.innerHTML = '<div class="smoke-copy"><span class="section-kicker">DELHI-NCR · REGIONAL EXAMPLE</span><h3>What could move towards Delhi?</h3><p>Explore an illustrative seasonal wind corridor from Punjab and Haryana into Delhi. It is not a forecast for other Indian cities; the live wind for your area is shown above.</p><span class="simulation-pill"><i></i> LOOPING SIMULATION · NOT A LIVE ALERT</span></div><svg class="smoke-map" viewBox="0 0 620 300" role="img" aria-label="Looping illustrative wind corridor from Punjab and Haryana towards Delhi"><defs><linearGradient id="smokeTrack"><stop stop-color="#d9b789" stop-opacity=".1"/><stop offset=".75" stop-color="#d39565" stop-opacity=".7"/><stop offset="1" stop-color="#6e9d84" stop-opacity=".8"/></linearGradient></defs><path d="M30 60 590 244M15 235 470 5M200 300 355 0M0 130 620 195" stroke="#fff" stroke-width="12"/><path d="M30 60 590 244M15 235 470 5M200 300 355 0M0 130 620 195" stroke="#dce7dc" stroke-dasharray="3 7" fill="none"/><path d="M82 69 C192 29 206 162 319 133 S456 125 535 209" fill="none" stroke="url(#smokeTrack)" stroke-width="15" stroke-linecap="round" opacity=".42"/><path id="appWindPathA" d="M82 69 C192 29 206 162 319 133 S456 125 535 209" fill="none" stroke="transparent"/><path id="appWindPathB" d="M50 148 C180 104 233 219 340 179 S454 176 548 237" fill="none" stroke="transparent"/><path d="M82 69 C192 29 206 162 319 133 S456 125 535 209M50 148 C180 104 233 219 340 179 S454 176 548 237" fill="none" stroke="#76a28d" stroke-width="1.5" stroke-dasharray="6 9" class="flow-dash"/><circle r="6" fill="#c6875a"><animateMotion dur="7s" repeatCount="indefinite"><mpath href="#appWindPathA"/></animateMotion></circle><circle r="4" fill="#bd7951"><animateMotion dur="9s" begin="-3s" repeatCount="indefinite"><mpath href="#appWindPathB"/></animateMotion></circle><circle cx="100" cy="67" r="27" fill="#d2ae7f" opacity=".19"/><circle cx="100" cy="67" r="5" fill="#bd8a5b"/><circle cx="245" cy="135" r="25" fill="#cfaa7b" opacity=".16"/><circle cx="245" cy="135" r="5" fill="#bd8a5b"/><circle cx="535" cy="209" r="36" fill="#78a38b" opacity=".18"/><circle cx="535" cy="209" r="8" fill="#4e806d" stroke="white" stroke-width="4"/><text x="70" y="30">PUNJAB</text><text x="215" y="91">HARYANA</text><text x="510" y="265" class="smoke-delhi">DELHI</text><text x="355" y="73" class="smoke-flow-label">PREVAILING WINDS →</text></svg>';
+  const fireCard = document.createElement('article');
+  fireCard.className = 'card fire-card';
+  fireCard.innerHTML = '<div class="fire-head"></div><div class="fire-layout"><div class="fire-map"></div><div class="fire-side"></div></div>';
+  fireCard.addEventListener('click', event => { const button = event.target.closest('[data-days]'); if (button) loadFires(Number(button.dataset.days)); });
+  const historyCard = document.createElement('article');
+  historyCard.className = 'card history-card';
+  historyCard.addEventListener('click', event => { const button = event.target.closest('[data-days]'); if (button) { historyDays = Number(button.dataset.days); historyCard.dataset.key = ''; loadHistory(); } });
 
   grid.append(
     today,
-    page('overview', div('air-primary', air, forecast)),
+    page('overview', div('air-primary', air, forecast), historyCard),
     page('airspace', div('air-secondary', map, stations)),
     page('guidance', div('guidance-grid', adviceCard, profileCard)),
-    page('area-watch', windCard, smoke));
+    page('health', div('health-body')),
+    page('area-watch', windCard, fireCard));
   const more = document.getElementById('more');
   more.classList.add('page');
   more.hidden = true;
@@ -138,7 +169,6 @@ function buildPages() {
     if (!chatPanel.hidden) document.getElementById('chatInput').focus();
   });
   decorateWindScene(document.querySelector('.wind-scene'), 'windPathOne', 110, 87, 340, 268);
-  decorateWindScene(smoke.querySelector('.smoke-map'), 'appWindPathA', 100, 67, 345, 254);
 }
 
 function renderHeadings() {
@@ -147,9 +177,9 @@ function renderHeadings() {
     const copy = pages[id];
     document.querySelector(`#${id} > .group-heading`).innerHTML = `<div><span class="section-kicker">${copy.kicker}</span><h2>${safeText(copy.title(displayName()))}</h2></div><p>${copy.desc}</p>`;
   });
-  const labels = currentLanguage === 'hi' ? ['आज', 'सारांश', 'वायु क्षेत्र', 'सलाह', 'क्षेत्र पर नज़र', 'और'] : ['Today', 'Overview', 'Airspace', 'Guidance', 'Area watch', 'More'];
+  const labels = currentLanguage === 'hi' ? ['आज', 'सारांश', 'वायु क्षेत्र', 'सलाह', 'सेहत', 'क्षेत्र पर नज़र', 'और'] : ['Today', 'Overview', 'Airspace', 'Guidance', 'Health', 'Area watch', 'More'];
   document.querySelectorAll('.side-nav .nav-item').forEach((item, index) => { const icon = item.querySelector('.nav-icon')?.outerHTML || ''; item.innerHTML = `${icon} ${safeText(labels[index])}`; });
-  const mobile = currentLanguage === 'hi' ? ['आज', 'सारांश', 'वायु', 'सलाह', 'क्षेत्र', 'और'] : ['Today', 'Overview', 'Airspace', 'Guidance', 'Area', 'More'];
+  const mobile = currentLanguage === 'hi' ? ['आज', 'सारांश', 'वायु', 'सलाह', 'सेहत', 'क्षेत्र', 'और'] : ['Today', 'Overview', 'Airspace', 'Guidance', 'Health', 'Area', 'More'];
   document.querySelectorAll('.mobile-nav a').forEach((item, index) => { const icon = item.querySelector('span')?.outerHTML || ''; item.innerHTML = `${icon}${mobile[index]}`; });
   showPage(location.hash.slice(1), false);
 }
@@ -163,6 +193,8 @@ function showPage(id, scroll = true) {
   const label = document.querySelector(`.side-nav .nav-item[href="#${id}"]`)?.lastChild.textContent.trim();
   document.querySelector('.breadcrumb strong').textContent = label || '';
   if (scroll) window.scrollTo(0, 0);
+  refreshMaps();
+  if (id === 'overview') loadHistory();
 }
 window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
 
@@ -218,7 +250,153 @@ function renderStations(stations = []) {
   document.querySelector('.station-foot > span').innerHTML = `<span class="status-dot"></span> ${recent} recent · ${stations.length - recent - outliers} stale${outliers ? ` · ${outliers} outlier` : ''}`;
 }
 
+const BANDS = [[30, '#3f9b6b', 'Good', 'अच्छा'], [60, '#8bb35a', 'Satisfactory', 'संतोषजनक'], [90, '#d9a93c', 'Moderate', 'मध्यम'], [120, '#d9793c', 'Poor', 'ख़राब'], [250, '#c2453a', 'Very poor', 'बहुत ख़राब'], [Infinity, '#7d2a3a', 'Severe', 'गंभीर']];
+const bandOf = pm => BANDS.find(b => pm <= b[0]) || BANDS.at(-1);
+const inNcr = () => selectedLocation.latitude > 27.9 && selectedLocation.latitude < 29.3 && selectedLocation.longitude > 76.4 && selectedLocation.longitude < 77.9;
+const hasLeaflet = () => typeof L !== 'undefined';
+const maps = {};
+const homeIcon = () => L.divIcon({ className: '', html: '<span class="home-pin"></span>', iconSize: [18, 18] });
+
+function baseMap(key, el) {
+  if (maps[key]) return maps[key];
+  el.replaceChildren();
+  const map = L.map(el, { preferCanvas: true, scrollWheelZoom: false });
+  // ponytail: OSM's free tile server (light use only, attribution required); switch to a keyed provider if traffic grows.
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
+  return (maps[key] = { map, layer: L.layerGroup().addTo(map), bounds: null });
+}
+
+// Leaflet measures its container, so maps on hidden pages are resized and fitted when their page opens.
+function refreshMaps() {
+  Object.values(maps).forEach(m => {
+    if (!m.map.getContainer().offsetParent) return;
+    m.map.invalidateSize();
+    if (m.bounds) { m.map.fitBounds(m.bounds, { maxZoom: 13 }); m.bounds = null; }
+  });
+}
+
+// Point reached from [lat, lon] after km along a compass bearing (great circle).
+function destination([lat, lon], bearingDeg, km) {
+  const rad = Math.PI / 180, d = km / 6371, b = bearingDeg * rad, p1 = lat * rad;
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b));
+  const l2 = lon * rad + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+  return [p2 / rad, l2 / rad];
+}
+
 function renderCoverageMap(stations = []) {
+  if (!hasLeaflet()) return renderSchematicMap(stations);
+  const copy = ui(), lang = langKey();
+  const m = baseMap('stations', document.querySelector('.map-view'));
+  m.layer.clearLayers();
+  const home = [selectedLocation.latitude, selectedLocation.longitude];
+  const pts = stations.filter(s => Number.isFinite(s.latitude) && Number.isFinite(s.longitude));
+  const maxKm = Math.max(2, ...pts.map(s => s.distanceKm));
+  L.circle(home, { radius: maxKm * 1000, color: '#4e8676', weight: 1, dashArray: '4 5', fillColor: '#d6e7d8', fillOpacity: .18, interactive: false }).addTo(m.layer);
+  L.marker(home, { icon: homeIcon(), title: selectedLocation.name, keyboard: false }).addTo(m.layer);
+  pts.forEach((s, i) => {
+    const band = bandOf(s.pm2_5);
+    L.marker([s.latitude, s.longitude], { title: s.name, icon: L.divIcon({ className: '', iconSize: [26, 26], html: `<span class="st-pin${s.status !== 'reporting' ? ' stale' : ''}" style="--c:${s.flag ? '#8a8f8c' : band[1]}">${i + 1}</span>` }) })
+      .bindPopup(`<b>${safeText(s.name)}</b><br>${Number(s.pm2_5).toFixed(1)} µg/m³ · ${safeText(s.flag ? copy.outlierTag : band[lang === 'hi' ? 3 : 2])}<br><small>${s.distanceKm} km · ${s.status === 'reporting' ? copy.recent : copy.stale} · OpenAQ</small>`).addTo(m.layer);
+  });
+  m.bounds = pts.length ? L.latLngBounds([home, ...pts.map(s => [s.latitude, s.longitude])]).pad(.12) : L.latLng(home).toBounds(12000);
+  document.querySelector('.map-foot').innerHTML = `<span>${copy.mapFoot} · <i class="key-dot" style="--c:#3f9b6b"></i><i class="key-dot" style="--c:#d9a93c"></i><i class="key-dot" style="--c:#d9793c"></i><i class="key-dot" style="--c:#c2453a"></i></span><span>OpenAQ · ${copy.mapNote}</span>`;
+  refreshMaps();
+}
+
+// Area watch fire map: NASA FIRMS detections, the 500 km upwind wedge and per-state counts.
+let fireDays = 1;
+const fireCache = {};
+async function loadFires(days = fireDays) {
+  fireDays = days;
+  if (!API_BASE) return;
+  if (!fireCache[days]) {
+    renderFires();
+    try {
+      const result = await fetch(`${API_BASE}/v1/fires?days=${days}`);
+      const data = await result.json();
+      if (!result.ok) throw new Error(data.message);
+      fireCache[days] = data;
+    } catch {
+      fireCache[days] = { state: 'temporarily_unavailable', points: [] };
+      setTimeout(() => { delete fireCache[days]; }, 60000);
+    }
+  }
+  if (days === fireDays) renderFires();
+}
+
+function renderFires() {
+  const card = document.querySelector('.fire-card');
+  const copy = ui(), fires = fireCache[fireDays], w = lastData?.weather, up = lastData?.fires;
+  card.querySelector('.fire-head').innerHTML = `<div><span class="section-kicker">${copy.fireKicker}</span><h3>${copy.fireTitle}</h3></div><div class="seg" role="group">${[1, 3, 7].map(d => `<button type="button" data-days="${d}" class="${d === fireDays ? 'on' : ''}" aria-pressed="${d === fireDays}">${copy.days(d)}</button>`).join('')}</div>`;
+  const side = card.querySelector('.fire-side');
+  if (!fires) side.innerHTML = `<p class="muted">${copy.loading}</p>`;
+  else if (fires.state === 'not_configured') side.innerHTML = `<p class="fire-note">${copy.fireNotConfigured}</p>`;
+  else if (fires.state !== 'available') side.innerHTML = `<p class="fire-note">${copy.fireUnavailable}</p>`;
+  else {
+    const max = Math.max(1, ...fires.byState.map(s => s.count));
+    side.innerHTML = `${up?.state === 'available' ? `<div class="fire-up${up.count ? ' warn' : ''}"><b>${copy.fireUp(up.count, up.nearestKm)}</b>${up.count ? `<small>${up.topStates.map(s => `${safeText(s.state)} ${s.count}`).join(' · ')}</small>` : ''}</div>` : ''}
+      <p class="fire-total">${copy.fireTotal(fires.count, fires.shown)}</p><span class="section-kicker">${copy.byState}</span>
+      <div class="state-bars">${fires.byState.map(s => `<div class="state-bar"><span>${safeText(s.state)}</span><i style="--w:${(s.count / max * 100).toFixed(1)}%"></i><b>${s.count.toLocaleString('en-IN')}</b></div>`).join('')}</div>
+      <div class="frp-legend"><span class="section-kicker">${copy.frp}</span><span><i style="background:#f2b33d"></i>&lt; 10 MW</span><span><i style="background:#e8743b"></i>10–50</span><span><i style="background:#b8261f"></i>&gt; 50</span></div>`;
+  }
+  if (!hasLeaflet()) return;
+  const m = baseMap('fires', card.querySelector('.fire-map'));
+  m.layer.clearLayers();
+  const home = [selectedLocation.latitude, selectedLocation.longitude];
+  let bounds = L.latLngBounds([[6, 68], [37, 97.5]]);
+  if (w && Number.isFinite(w.fromDeg)) {
+    const wedge = [home, ...Array.from({ length: 15 }, (_, i) => destination(home, w.fromDeg - 35 + i * 5, 500)), home];
+    L.polygon(wedge, { color: '#4e8676', weight: 1.5, dashArray: '5 5', fillColor: '#7fb39b', fillOpacity: .12, interactive: false }).addTo(m.layer);
+    L.marker(destination(home, w.fromDeg, 540), { interactive: false, icon: L.divIcon({ className: '', iconSize: null, html: `<span class="wedge-label">${copy.wedge} · ${safeText(w.fromCompass)}</span>` }) }).addTo(m.layer);
+    bounds = L.latLngBounds(wedge).pad(.12);
+  }
+  (fires?.points || []).forEach(([lat, lon, frp, conf, time]) => L.circleMarker([lat, lon], { radius: Math.min(7, 2 + Math.sqrt(frp) / 2.5), stroke: false, fillColor: frp < 10 ? '#f2b33d' : frp < 50 ? '#e8743b' : '#b8261f', fillOpacity: .75 })
+    .bindPopup(`<b>${frp} MW</b> · ${safeText(time)} UTC<br><small>VIIRS · ${conf === 'h' ? 'high' : 'nominal'} confidence</small>`).addTo(m.layer));
+  L.marker(home, { icon: homeIcon(), title: selectedLocation.name }).addTo(m.layer);
+  m.bounds = bounds;
+  refreshMaps();
+}
+
+// Overview: past days of ERA5 weather next to CAMS PM2.5, loaded only when the page is open.
+let historyDays = 30;
+const historyCache = new Map();
+function historyHead(copy) {
+  const q = `lat=${encodeURIComponent(selectedLocation.latitude)}&lon=${encodeURIComponent(selectedLocation.longitude)}&days=${historyDays}`;
+  return `<div class="card-top"><div><div class="section-kicker">${copy.histKicker}</div><h2>${copy.histTitle(historyDays)}</h2></div><div class="hist-actions"><div class="seg" role="group">${[30, 90].map(d => `<button type="button" data-days="${d}" class="${d === historyDays ? 'on' : ''}" aria-pressed="${d === historyDays}">${d}d</button>`).join('')}</div><a class="csv-link" href="${API_BASE}/v1/history?${q}&format=csv" download>${copy.csv}</a></div></div>`;
+}
+
+async function loadHistory() {
+  const card = document.querySelector('.history-card');
+  if (!API_BASE || document.getElementById('overview').hidden) return;
+  const key = `${selectedLocation.latitude},${selectedLocation.longitude},${historyDays}`;
+  if (card.dataset.key === key) return;
+  card.dataset.key = key;
+  const copy = ui();
+  if (!historyCache.has(key)) {
+    card.innerHTML = `${historyHead(copy)}<p class="muted hist-msg">${copy.histLoading}</p>`;
+    try {
+      const result = await fetch(`${API_BASE}/v1/history?lat=${encodeURIComponent(selectedLocation.latitude)}&lon=${encodeURIComponent(selectedLocation.longitude)}&days=${historyDays}`);
+      if (!result.ok) throw new Error();
+      historyCache.set(key, await result.json());
+    } catch {
+      if (card.dataset.key === key) { card.dataset.key = ''; card.innerHTML = `${historyHead(copy)}<p class="muted hist-msg">${copy.histFailed}</p>`; }
+      return;
+    }
+    if (card.dataset.key !== key) return;
+  }
+  const h = historyCache.get(key), rows = h.rows, b = h.backtest;
+  const pmMax = Math.max(50, ...rows.map(r => r.pm2_5 || 0)), viMax = Math.max(8000, ...rows.map(r => r.ventilation || 0)), bw = 720 / Math.max(1, rows.length);
+  const y = (v, max) => (150 - v / max * 140).toFixed(1);
+  const bars = rows.map((r, i) => Number.isFinite(r.pm2_5) ? `<rect x="${(i * bw + bw * .15).toFixed(1)}" width="${(bw * .7).toFixed(1)}" y="${y(r.pm2_5, pmMax)}" height="${(r.pm2_5 / pmMax * 140).toFixed(1)}" fill="${bandOf(r.pm2_5)[1]}" rx="1.5"><title>${r.date} · PM2.5 ${r.pm2_5} µg/m³ · ${r.ventilation ?? '—'} m²/s</title></rect>` : '').join('');
+  const line = rows.map((r, i) => Number.isFinite(r.ventilation) ? `${(i * bw + bw / 2).toFixed(1)},${y(r.ventilation, viMax)}` : '').filter(Boolean).join(' ');
+  card.innerHTML = `${historyHead(copy)}<svg class="hist-chart" viewBox="0 0 720 152" preserveAspectRatio="none" role="img" aria-label="${copy.histLegend.join(', ')}">${bars}<line x1="0" x2="720" y1="${y(6000, viMax)}" y2="${y(6000, viMax)}" class="vi-threshold"/><polyline points="${line}" class="vi-line"/></svg>
+    <div class="hist-axis"><span>${rows[0]?.date || ''}</span><span>${rows[rows.length >> 1]?.date || ''}</span><span>${rows.at(-1)?.date || ''}</span></div>
+    <div class="hist-legend"><span><i class="bar"></i>${copy.histLegend[0]} · max ${Math.round(pmMax)}</span><span><i class="line"></i>${copy.histLegend[1]}</span><span><i class="dash"></i>6000 m²/s</span></div>
+    ${b.days ? `<p class="hist-backtest">${copy.histBacktest(b.poorVentilationDays, b.days, b.meanPm2_5PoorVentilation, b.meanPm2_5GoodVentilation)}${b.correlationVentilationPm2_5 != null ? ` ${copy.histCorr(b.correlationVentilationPm2_5)}` : ''}</p>` : ''}<small class="muted hist-note">${safeText(h.note)}</small>`;
+}
+
+function renderSchematicMap(stations = []) {
   const map = document.querySelector('.map-view');
   const all = stations.filter(s => Number.isFinite(s.latitude) && Number.isFinite(s.longitude));
   const maxKm = Math.max(2, ...all.map(s => s.distanceKm));
@@ -313,9 +491,13 @@ function briefingItems(data) {
   if (best) items.push({ tone: 'ok', icon: '☼', title: copy.bestTime(formatTime(best.from), formatTime(best.to)), body: copy.bestTimeBody(Math.round(best.avg)) });
   (data.pollutants || []).filter(p => p.key !== 'pm2_5' && p.level.index >= 2 && p.affects.includes(selectedProfile))
     .forEach(p => items.push({ tone: p.level.index >= 3 ? 'warn' : 'caution', icon: '⚗', title: copy.pollutantAlert(p.name, p.level.label[lang]), body: p.about[lang] }));
-  const wind = data.wind;
-  const inNcr = selectedLocation.latitude > 27.9 && selectedLocation.latitude < 29.3 && selectedLocation.longitude > 76.4 && selectedLocation.longitude < 77.9;
-  if (inNcr && wind && wind.fromDeg >= 250 && wind.fromDeg <= 350) items.push({ tone: 'caution', icon: '⌁', title: copy.ncrSmoke });
+  const w = data.weather, fires = data.fires;
+  if (w?.ventilation?.label === 'poor') {
+    const best = bestMixing(w.hourly);
+    items.push({ tone: 'caution', icon: '≋', title: copy.stagnant(Math.round(w.blhM)), body: copy.stagnantBody(w.ventilation.index.toLocaleString('en-IN'), best && formatTime(best.time)) });
+  }
+  if (fires?.state === 'available' && fires.count) items.push({ tone: fires.count >= 50 ? 'warn' : 'caution', icon: '🔥', title: copy.firesUp(fires.count), body: copy.firesUpBody(fires.topStates.map(s => s.state).join(', '), fires.nearestKm, w?.fromCompass || '') });
+  else if (fires?.state !== 'available' && inNcr() && w && w.fromDeg >= 250 && w.fromDeg <= 350) items.push({ tone: 'caution', icon: '⌁', title: copy.ncrSmoke });
   if (data.estimate?.method === 'open_meteo_model') items.push({ tone: 'info', icon: 'ℹ', title: copy.modelNote });
   return items;
 }
@@ -350,19 +532,29 @@ function renderPollutants() {
 function renderPersonal() {
   renderGuidance();
   renderBriefing();
+  renderHealth();
   document.querySelector('.avatar').textContent = PERSONAS[selectedProfile].icon;
 }
 
 const arrow = (deg, size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" style="transform:rotate(${(deg + 180) % 360}deg)" aria-hidden="true"><path d="M12 3v16m0-16-5 5m5-5 5 5" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
-function renderWind() {
+// Daytime hour with the strongest vertical mixing in the next 24 hours.
+const bestMixing = (hourly = []) => hourly.filter(h => Number.isFinite(h.ventilation) && +h.time.slice(11, 13) >= 6 && +h.time.slice(11, 13) <= 21)
+  .reduce((best, h) => !best || h.ventilation > best.ventilation ? h : best, null);
+
+function renderWeather() {
   const card = document.querySelector('.wind-card');
-  const copy = ui(), wind = lastData?.wind;
-  if (!wind || !Number.isFinite(wind.fromDeg)) { card.innerHTML = `<span class="section-kicker">${copy.windKicker}</span><p class="wind-note">${copy.windUnavailable}</p>`; return; }
-  const inNcr = selectedLocation.latitude > 27.9 && selectedLocation.latitude < 29.3 && selectedLocation.longitude > 76.4 && selectedLocation.longitude < 77.9;
-  const fromNw = wind.fromDeg >= 250 && wind.fromDeg <= 350;
-  const strip = wind.hourly.filter((_, i) => i % 3 === 0).slice(0, 8).map(h => `<span class="wind-hour"><small>${formatTime(h.time)}</small>${arrow(h.fromDeg, 18)}<b>${h.speedKmh}</b></span>`).join('');
-  card.innerHTML = `<div class="wind-main"><div class="wind-compass" aria-hidden="true"><span>N</span>${arrow(wind.fromDeg, 54)}</div><div><span class="section-kicker">${copy.windKicker}</span><h3>${copy.windTitle}</h3><p class="wind-now"><b>${copy.windFrom(wind.fromCompass)}</b> · ${wind.speedKmh} km/h${Number.isFinite(wind.gustKmh) ? ` · ${copy.gusts} ${wind.gustKmh} km/h` : ''}</p>${inNcr ? `<p class="wind-note ${fromNw ? 'warn' : ''}">${fromNw ? copy.ncrSmoke : copy.ncrClear}</p>` : ''}</div></div><div class="wind-strip" aria-label="${copy.next24}"><span class="wind-strip-label">${copy.next24} · km/h</span>${strip}</div>`;
+  const copy = ui(), w = lastData?.weather;
+  if (!w || !Number.isFinite(w.fromDeg)) { card.innerHTML = `<span class="section-kicker">${copy.wxKicker}</span><p class="wind-note">${copy.windUnavailable}</p>`; return; }
+  const fromNw = w.fromDeg >= 250 && w.fromDeg <= 350;
+  const showNcr = inNcr() && lastData.fires?.state !== 'available';
+  const vi = w.ventilation;
+  const strip = w.hourly.filter((_, i) => i % 3 === 0).slice(0, 8).map(h => `<span class="wind-hour"><small>${formatTime(h.time)}</small>${arrow(h.fromDeg, 18)}<b>${h.speedKmh}</b><small class="blh">${h.blhM == null ? '' : `${Math.round(h.blhM)} m`}</small></span>`).join('');
+  const tile = (label, value, extra = '') => `<div class="wx"><small>${label}</small><b>${value}</b>${extra}</div>`;
+  card.innerHTML = `<div class="wind-main"><div class="wind-compass" aria-hidden="true"><span>N</span>${arrow(w.fromDeg, 54)}</div><div><span class="section-kicker">${copy.wxKicker}</span><h3>${copy.windTitle}</h3><p class="wind-now"><b>${copy.windFrom(w.fromCompass)}</b> · ${w.speedKmh} km/h${Number.isFinite(w.gustKmh) ? ` · ${copy.gusts} ${w.gustKmh} km/h` : ''}</p>${showNcr ? `<p class="wind-note ${fromNw ? 'warn' : ''}">${fromNw ? copy.ncrSmoke : copy.ncrClear}</p>` : ''}</div></div>
+    <div class="wx-grid">${tile(copy.tempL, Number.isFinite(w.temperatureC) ? `${Math.round(w.temperatureC)}°C` : '—')}${tile(copy.humidL, Number.isFinite(w.humidity) ? `${w.humidity}%` : '—')}${tile(copy.blhL, Number.isFinite(w.blhM) ? `${Math.round(w.blhM)} m` : '—')}${tile(copy.viL, vi ? `${vi.index.toLocaleString('en-IN')} m²/s` : '—', vi ? `<span class="vi-chip vi-${vi.label}">${copy.vi[vi.label]}</span>` : '')}</div>
+    <p class="wx-explain">${copy.viExplain}</p>
+    <div class="wind-strip" aria-label="${copy.next24}"><span class="wind-strip-label">${copy.next24} · km/h · m = ${copy.blhL.toLowerCase()}</span>${strip}</div>`;
 }
 
 function render(data) {
@@ -388,8 +580,14 @@ function render(data) {
   renderCoverageMap(data.stations);
   renderForecast(data.forecast);
   renderPersonal();
-  renderWind();
-  document.querySelector('.page-footer > span:last-child').innerHTML = `${safeText(data.disclaimer)} <i>·</i> <a href="https://docs.openaq.org/" target="_blank" rel="noreferrer">OpenAQ source ↗</a> <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo source ↗</a>`;
+  renderWeather();
+  loadFires();
+  document.querySelector('.history-card').dataset.key = '';
+  loadHistory();
+  const fireSource = document.getElementById('fireSource');
+  fireSource.textContent = data.sources?.fires === 'available' ? 'NASA FIRMS ↗' : data.sources?.fires === 'not_configured' ? 'MAP_KEY needed' : 'Unavailable';
+  fireSource.className = data.sources?.fires === 'available' ? '' : 'coming-soon';
+  document.querySelector('.page-footer > span:last-child').innerHTML = `${safeText(data.disclaimer)} <i>·</i> <a href="https://docs.openaq.org/" target="_blank" rel="noreferrer">OpenAQ source ↗</a> <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo source ↗</a> <a href="https://firms.modaps.eosdis.nasa.gov/" target="_blank" rel="noreferrer">NASA FIRMS ↗</a>`;
   setStatus(data.cache === 'stale' ? 'CACHED DATA' : 'LIVE DATA', data.cache === 'stale' ? 'warn' : 'ok');
 }
 
@@ -397,7 +595,7 @@ let loadToken = 0;
 async function loadAir() {
   const token = ++loadToken;
   document.querySelector('.local-card strong').textContent = selectedLocation.name;
-  document.querySelector('.local-card div:nth-child(2) .tiny:last-child').textContent = selectedLocation.custom ? 'Shared device location' : 'India · selected area';
+  document.querySelector('.local-card div:nth-child(2) .tiny:last-child').textContent = selectedLocation.geo ? ui().deviceLocation : selectedLocation.label || 'India · selected area';
   document.querySelector('.location-select .location-name').textContent = selectedLocation.name;
   if (!API_BASE) {
     setStatus('API NOT CONFIGURED');
@@ -457,35 +655,75 @@ async function ask(question) {
   }
 }
 
+// Searched places and cities persist on this device; a shared device location is never stored.
 function setLocation(location) {
   selectedLocation = location;
-  citySelect.value = location.custom ? '' : location.name;
-  locationPicker.value = location.custom ? '' : location.name;
-  try { location.custom ? localStorage.removeItem('saans-city') : localStorage.setItem('saans-city', location.name); } catch { /* session only */ }
-  document.getElementById('settingsLocation').textContent = location.custom ? 'My location · updated' : `${location.name} · India`;
+  citySelect.value = INDIA_CITIES.some(city => city.name === location.name) ? location.name : '';
+  try {
+    localStorage.removeItem('saans-city');
+    if (location.geo) localStorage.removeItem('saans-location');
+    else localStorage.setItem('saans-location', JSON.stringify({ name: location.name, latitude: location.latitude, longitude: location.longitude, label: location.label || '' }));
+  } catch { /* session only */ }
+  document.getElementById('settingsLocation').textContent = location.geo ? ui().deviceLocation : location.label || `${location.name} · India`;
   loadAir();
 }
 
 function chooseCurrentLocation() {
   if (!navigator.geolocation) { toast('Location is not supported in this browser.'); return; }
   navigator.geolocation.getCurrentPosition(
-    position => setLocation({ name: 'My location', latitude: position.coords.latitude, longitude: position.coords.longitude, custom: true }),
-    () => { toast('Location permission was not granted. Choose a city instead.'); locationPicker.value = selectedLocation.custom ? '' : selectedLocation.name; },
+    position => setLocation({ name: 'My location', latitude: position.coords.latitude, longitude: position.coords.longitude, geo: true }),
+    () => toast('Location permission was not granted. Search for your area or choose a city instead.'),
     { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 });
 }
 
-// Header location control: a native <select> laid over the pill gives a real dropdown on every device.
+// Header location control: search any Indian locality (Open-Meteo geocoding through the API), share device location, or pick a city.
 const cityOptions = () => INDIA_CITIES.map(city => `<option value="${safeText(city.name)}">${safeText(city.name)}</option>`).join('');
-const locationPill = document.createElement('label');
-locationPill.className = 'location-select';
-locationPill.innerHTML = `<span class="pin">⌖</span> <span class="location-name">${safeText(selectedLocation.name)}</span> <span class="chevron">⌄</span><select class="location-picker" aria-label="Choose location"><option value="" disabled>My location</option><option value="__geo">${ui().useMyLocation}</option>${cityOptions()}</select>`;
+const locationPill = document.createElement('div');
+locationPill.className = 'location-select loc-wrap';
+locationPill.innerHTML = `<button type="button" class="loc-button" aria-haspopup="dialog" aria-expanded="false"><span class="pin">⌖</span> <span class="location-name">${safeText(selectedLocation.name)}</span> <span class="chevron">⌄</span></button><div class="loc-pop" role="dialog" aria-label="Choose location" hidden><input type="search" class="loc-search" autocomplete="off" spellcheck="false" maxlength="60" aria-label="Search location"/><button type="button" class="loc-geo"></button><div class="loc-results" role="listbox"></div></div>`;
 document.querySelector('.location-select').replaceWith(locationPill);
-const locationPicker = locationPill.querySelector('.location-picker');
-locationPicker.addEventListener('change', () => {
-  if (locationPicker.value === '__geo') return chooseCurrentLocation();
-  const city = INDIA_CITIES.find(item => item.name === locationPicker.value);
-  if (city) setLocation(city);
+const locationButton = locationPill.querySelector('.loc-button');
+const locationPop = locationPill.querySelector('.loc-pop');
+const locationSearch = locationPill.querySelector('.loc-search');
+const locationResults = locationPill.querySelector('.loc-results');
+let locationMatches = [];
+function showPlaces(places, heading) {
+  locationMatches = places;
+  locationResults.innerHTML = places.length ? `<span class="loc-heading">${heading}</span>${places.map((place, i) => `<button type="button" role="option" class="loc-option" data-i="${i}"><b>${safeText(place.name)}</b>${place.label && place.label !== place.name ? `<small>${safeText(place.label)}</small>` : ''}</button>`).join('')}` : `<p class="loc-empty">${ui().noResults}</p>`;
+}
+function toggleLocationPop(open = locationPop.hidden) {
+  locationPop.hidden = !open;
+  locationButton.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  locationSearch.value = '';
+  locationSearch.placeholder = ui().searchPlaceholder;
+  locationPill.querySelector('.loc-geo').textContent = ui().useMyLocation;
+  showPlaces(INDIA_CITIES, ui().cities);
+  locationSearch.focus();
+}
+const pickPlace = place => { toggleLocationPop(false); setLocation(place); };
+let searchTimer, searchToken = 0;
+locationSearch.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = locationSearch.value.trim();
+  if (q.length < 2 || !API_BASE) { showPlaces(INDIA_CITIES.filter(city => city.name.toLowerCase().includes(q.toLowerCase())), ui().cities); return; }
+  searchTimer = setTimeout(async () => {
+    const token = ++searchToken;
+    try {
+      const result = await fetch(`${API_BASE}/v1/geocode?q=${encodeURIComponent(q)}`);
+      const data = await result.json();
+      if (token === searchToken) showPlaces(result.ok ? data.results : [], ui().results);
+    } catch { if (token === searchToken) showPlaces([], ui().results); }
+  }, 300);
 });
+locationSearch.addEventListener('keydown', event => {
+  if (event.key === 'Escape') { toggleLocationPop(false); locationButton.focus(); }
+  if (event.key === 'Enter' && locationMatches[0]) { event.preventDefault(); pickPlace(locationMatches[0]); }
+});
+locationResults.addEventListener('click', event => { const option = event.target.closest('.loc-option'); if (option) pickPlace(locationMatches[Number(option.dataset.i)]); });
+locationPill.querySelector('.loc-geo').addEventListener('click', () => { toggleLocationPop(false); chooseCurrentLocation(); });
+locationButton.addEventListener('click', () => toggleLocationPop());
+document.addEventListener('click', event => { if (!locationPop.hidden && !locationPill.contains(event.target)) toggleLocationPop(false); });
 
 document.querySelector('.air-card .more-btn').addEventListener('click', loadAir);
 document.getElementById('chatForm').addEventListener('submit', event => { event.preventDefault(); ask(document.getElementById('chatInput').value); });
@@ -543,11 +781,13 @@ document.getElementById('useCurrentLocation').addEventListener('click', chooseCu
 const citySelect = document.getElementById('citySelect');
 citySelect.innerHTML = `<option value="">Choose a city</option>${cityOptions()}`;
 try {
-  const savedCity = localStorage.getItem('saans-city');
-  const match = INDIA_CITIES.find(city => city.name === savedCity);
-  if (match) selectedLocation = match;
+  const saved = JSON.parse(localStorage.getItem('saans-location') || 'null');
+  const savedCity = INDIA_CITIES.find(city => city.name === localStorage.getItem('saans-city')); // older installs
+  if (saved && typeof saved.name === 'string' && Number.isFinite(saved.latitude) && Number.isFinite(saved.longitude) && Math.abs(saved.latitude) <= 90 && Math.abs(saved.longitude) <= 180)
+    selectedLocation = { name: saved.name.slice(0, 60), latitude: saved.latitude, longitude: saved.longitude, label: String(saved.label || '').slice(0, 120) };
+  else if (savedCity) selectedLocation = savedCity;
 } catch { /* retain the India default */ }
-citySelect.value = locationPicker.value = selectedLocation.name;
+citySelect.value = INDIA_CITIES.some(city => city.name === selectedLocation.name) ? selectedLocation.name : '';
 citySelect.addEventListener('change', () => {
   const city = INDIA_CITIES.find(item => item.name === citySelect.value);
   if (city) setLocation(city);
@@ -593,7 +833,6 @@ function applyLanguage(language) {
   document.querySelector('.name-card h1').innerHTML = copy.nameTitle;
   document.querySelector('.persona-field legend').textContent = copy.personaLegend;
   document.querySelector('.enter-button').innerHTML = `${copy.enter} <span>→</span>`;
-  locationPicker.querySelector('option[value="__geo"]').textContent = ui().useMyLocation;
   if (!document.getElementById('chatInput').disabled) document.getElementById('chatInput').placeholder = ui().askPlaceholder;
   renderPersonaGrid();
   renderHeadings();

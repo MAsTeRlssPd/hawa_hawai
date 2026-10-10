@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@aws-lambda-powertools/tracer": "2.36.0",
     "@aws-sdk/client-bedrock-runtime": "3.1147.0",
     "@aws-sdk/client-dynamodb": "3.1147.0",
     "@aws-sdk/client-ssm": "3.1147.0",

@@ -17,7 +17,9 @@ function facts(air, place) {
     recentStations: air.estimate?.stationCount ?? 0,
     band: air.guidance?.band ? { name: air.guidance.band.label.en, index: air.guidance.band.index, cpcbImpact: air.guidance.band.impact.en } : null,
     next24hModel: future.length ? { min: Math.round(Math.min(...future)), max: Math.round(Math.max(...future)) } : null,
-    wind: air.wind ? { speedKmh: air.wind.speedKmh, from: air.wind.fromCompass } : null,
+    wind: air.weather ? { speedKmh: air.weather.speedKmh, from: air.weather.fromCompass } : null,
+    weather: air.weather ? { temperatureC: air.weather.temperatureC, humidityPct: air.weather.humidity, boundaryLayerM: air.weather.blhM, ventilationIndex: air.weather.ventilation?.index, ventilation: air.weather.ventilation?.label } : null,
+    upwindFires24h: air.fires?.state === 'available' ? { count: air.fires.count, withinKm: air.fires.rangeKm, nearestKm: air.fires.nearestKm, states: air.fires.topStates, within50km: air.fires.nearbyCount } : null,
     otherPollutantsModel: (air.pollutants || []).filter(p => p.key !== 'pm2_5').map(p => ({ name: p.name, value: p.value, unit: p.unit, level: p.level.label.en }))
   };
 }
@@ -25,6 +27,8 @@ function facts(air, place) {
 function sourcesFor(air) {
   const list = [CPCB_SOURCE, { label: 'Open-Meteo / CAMS air-quality forecast', url: 'https://open-meteo.com/en/docs/air-quality-api' }];
   if (air.stations?.length) list.push({ label: 'OpenAQ monitoring stations', url: 'https://docs.openaq.org/' });
+  if (air.weather) list.push({ label: 'Open-Meteo weather (wind, boundary layer)', url: 'https://open-meteo.com/en/docs' });
+  if (air.fires?.state === 'available') list.push({ label: 'NASA FIRMS active fires', url: 'https://firms.modaps.eosdis.nasa.gov/' });
   return list;
 }
 
@@ -40,8 +44,17 @@ export function ruleAnswer(question, air, { profile, lang, place }) {
   const outlook = f.next24hModel ? (hi ? ` अगले 24 घंटों में मॉडल ${f.next24hModel.min}–${f.next24hModel.max} µg/m³ दिखाता है।` : ` The model expects ${f.next24hModel.min}–${f.next24hModel.max} µg/m³ over the next 24 hours.`) : '';
   if (/pm ?2\.?5|what is|meaning|मतलब|क्या है/.test(q))
     return (hi ? 'PM2.5 हवा में 2.5 माइक्रोमीटर या उससे छोटे कण हैं, जो फेफड़ों में गहराई तक जा सकते हैं। ' : 'PM2.5 means airborne particles 2.5 micrometres or smaller — small enough to reach deep into the lungs. ') + now;
-  if (/wind|smoke|parali|stubble|हवा की दिशा|धुआँ|पराली/.test(q) && f.wind)
-    return (hi ? `हवा ${f.wind.from} दिशा से लगभग ${f.wind.speedKmh} km/h की गति से आ रही है। ` : `Wind is coming from the ${f.wind.from} at about ${f.wind.speedKmh} km/h. `) + now + outlook;
+  if (/wind|smoke|parali|stubble|fire|burn|हवा की दिशा|धुआँ|पराली|आग/.test(q) && f.wind) {
+    const fires = f.upwindFires24h;
+    const fireText = !fires ? '' : fires.count
+      ? (hi ? ` पिछले 24 घंटों में हवा की दिशा में ${fires.withinKm} km के भीतर ${fires.count} आग दर्ज हुईं (${fires.states.map(x => x.state).join(', ')}), सबसे पास ~${fires.nearestKm} km।` : ` NASA FIRMS saw ${fires.count} fires upwind within ${fires.withinKm} km in the last 24 hours (${fires.states.map(x => x.state).join(', ')}), nearest ~${fires.nearestKm} km.`)
+      : (hi ? ' पिछले 24 घंटों में हवा की दिशा में कोई बड़ी आग दर्ज नहीं हुई।' : ' NASA FIRMS saw no fires upwind in the last 24 hours.');
+    return (hi ? `हवा ${f.wind.from} दिशा से लगभग ${f.wind.speedKmh} km/h की गति से आ रही है।` : `Wind is coming from the ${f.wind.from} at about ${f.wind.speedKmh} km/h.`) + fireText + ' ' + now + outlook;
+  }
+  if (/stagnant|trapped|fog|smog|why.*(bad|high|worse)|inversion|ventilat|रुकी|धुंध|क्यों/.test(q) && f.weather?.ventilationIndex != null) {
+    const poor = f.weather.ventilationIndex < 6000;
+    return (hi ? `हवा की मिलने वाली परत लगभग ${f.weather.boundaryLayerM} m ऊँची है और वेंटिलेशन इंडेक्स ${f.weather.ventilationIndex} m²/s है — ${poor ? 'प्रदूषण ज़मीन के पास फँसा रहता है' : 'प्रदूषण फैल पा रहा है'}। ` : `The air's mixing layer is about ${f.weather.boundaryLayerM} m deep and the ventilation index is ${f.weather.ventilationIndex} m²/s — ${poor ? 'below 6000, so pollution stays trapped near the ground' : 'enough for pollution to disperse'}. `) + now + outlook;
+  }
   if (/mask|मास्क/.test(q))
     return now + (f.band.index >= 3 ? (hi ? ' बाहर जाते समय अच्छी तरह फिट N95/FFP2 मास्क मददगार है।' : ' A well-fitted N95/FFP2 mask helps when you are outdoors.') : (hi ? ' इस स्तर पर अधिकांश लोगों को मास्क की ज़रूरत नहीं होती।' : ' Most people do not need a mask at this level.'));
   return `${now}${outlook} ${hi ? `${who} के लिए:` : `For ${who}:`} ${actions}`;

@@ -1,5 +1,5 @@
-const CACHE = 'saans-app-v8';
-const CORE = ['/', '/index.html', '/styles.css?v=6', '/app.js?v=12', '/frontend-config.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'saans-app-v9';
+const CORE = ['/', '/index.html', '/styles.css?v=7', '/health.js?v=1', '/app.js?v=13', '/frontend-config.js', '/manifest.webmanifest', '/icon.svg'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 // Network first so deploys show up immediately; the cache is only the offline fallback. API calls are cross-origin and pass through.

@@ -1,11 +1,15 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Saans low-cost live air data API (OpenAQ + Open-Meteo)
+Description: Saans low-cost live air data API (OpenAQ + Open-Meteo + NASA FIRMS) with X-Ray, CloudTrail and a CloudWatch dashboard
 Parameters:
   OpenAqParameterName:
     Type: String
     Default: /saans/prod/openaq-api-key
     Description: SSM SecureString parameter name. Create it after deployment; the API works with model data before then.
+  FirmsParameterName:
+    Type: String
+    Default: /saans/prod/firms-map-key
+    Description: SSM SecureString holding the NASA FIRMS MAP_KEY. Fire endpoints report not_configured until it exists.
   AllowedOrigin:
     Type: String
     Default: '*'
@@ -25,6 +29,8 @@ Globals:
       Variables:
         CACHE_TABLE: !Ref AirCache
         OPENAQ_PARAMETER_NAME: !Ref OpenAqParameterName
+        FIRMS_PARAMETER_NAME: !Ref FirmsParameterName
+        POWERTOOLS_SERVICE_NAME: saans-api
         BEDROCK_MODEL_ID: !Ref BedrockModelId
 Resources:
   AirCache:
@@ -57,6 +63,9 @@ Resources:
         AllowHeaders: [content-type]
         AllowMethods: [GET, POST, OPTIONS]
         MaxAge: 600
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","time":"$context.requestTime","method":"$context.httpMethod","path":"$context.path","status":"$context.status","latencyMs":"$context.responseLatency","integrationMs":"$context.integrationLatency","userAgent":"$context.identity.userAgent"}'
       DefaultRouteSettings:
         ThrottlingBurstLimit: 10
         ThrottlingRateLimit: 5
@@ -75,7 +84,9 @@ Resources:
         - Statement:
             - Effect: Allow
               Action: [ssm:GetParameter]
-              Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OpenAqParameterName}'
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OpenAqParameterName}'
+                - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${FirmsParameterName}'
             - Effect: Allow
               Action: [kms:Decrypt]
               Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
@@ -104,11 +115,132 @@ Resources:
             ApiId: !Ref AirApi
             Path: /v1/ask
             Method: POST
+        Fires:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/fires
+            Method: GET
+        History:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/history
+            Method: GET
+        Geocode:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/geocode
+            Method: GET
   AirDataLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-air-data'
       RetentionInDays: 14
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-access'
+      RetentionInDays: 14
+  # CloudTrail: the account had no trail. The first trail's management events are free; S3 storage is pennies.
+  AuditBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'saans-audit-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-audit-logs
+            Status: Enabled
+            ExpirationInDays: 90
+  AuditBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AuditBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CloudTrailAclCheck
+            Effect: Allow
+            Principal: { Service: cloudtrail.amazonaws.com }
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt AuditBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AWS::StackName}-audit'
+          - Sid: CloudTrailWrite
+            Effect: Allow
+            Principal: { Service: cloudtrail.amazonaws.com }
+            Action: s3:PutObject
+            Resource: !Sub '${AuditBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AWS::StackName}-audit'
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt AuditBucket.Arn, !Sub '${AuditBucket.Arn}/*']
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  AuditTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: AuditBucketPolicy
+    Properties:
+      TrailName: !Sub '${AWS::StackName}-audit'
+      S3BucketName: !Ref AuditBucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+      # Management events (who changed what, console sign-ins, IAM) plus every invoke of the API function.
+      EventSelectors:
+        - ReadWriteType: All
+          IncludeManagementEvents: true
+          DataResources:
+            - Type: AWS::Lambda::Function
+              Values: [!GetAtt AirDataFunction.Arn]
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-ops'
+      DashboardBody: !Sub |
+        {"widgets":[
+          {"type":"metric","x":0,"y":0,"width":8,"height":6,"properties":{"title":"API requests and errors","region":"${AWS::Region}","stat":"Sum","period":300,
+            "metrics":[["AWS/ApiGateway","Count","ApiId","${AirApi}"],[".","4xx",".","."],[".","5xx",".","."]]}},
+          {"type":"metric","x":8,"y":0,"width":8,"height":6,"properties":{"title":"Lambda duration p50/p95 (ms)","region":"${AWS::Region}","period":300,
+            "metrics":[["AWS/Lambda","Duration","FunctionName","${AirDataFunction}",{"stat":"p50"}],["...",{"stat":"p95"}]]}},
+          {"type":"metric","x":16,"y":0,"width":8,"height":6,"properties":{"title":"Lambda errors and throttles","region":"${AWS::Region}","stat":"Sum","period":300,
+            "metrics":[["AWS/Lambda","Errors","FunctionName","${AirDataFunction}"],[".","Throttles",".","."]]}},
+          {"type":"metric","x":0,"y":6,"width":12,"height":6,"properties":{"title":"Provider latency p95 (ms)","region":"${AWS::Region}","stat":"p95","period":300,
+            "metrics":[["Saans","ProviderLatency","Provider","openaq"],["...","open_meteo_cams"],["...","open_meteo_weather"],["...","nasa_firms"],["...","open_meteo_era5"],["...","open_meteo_geocoding"]]}},
+          {"type":"metric","x":12,"y":6,"width":12,"height":6,"properties":{"title":"Provider errors","region":"${AWS::Region}","stat":"Sum","period":300,
+            "metrics":[["Saans","ProviderError","Provider","openaq"],["...","open_meteo_cams"],["...","open_meteo_weather"],["...","nasa_firms"],["...","open_meteo_era5"],["...","open_meteo_geocoding"]]}},
+          {"type":"metric","x":0,"y":12,"width":8,"height":6,"properties":{"title":"Cache hits vs misses (air)","region":"${AWS::Region}","stat":"Sum","period":300,
+            "metrics":[["Saans","CacheHit","Route","air"],[".","CacheMiss",".","."]]}},
+          {"type":"metric","x":8,"y":12,"width":8,"height":6,"properties":{"title":"Ask Saans answers by mode","region":"${AWS::Region}","stat":"Sum","period":300,
+            "metrics":[["Saans","AskAnswered","Mode","bedrock"],["...","rules"]]}},
+          {"type":"metric","x":16,"y":12,"width":8,"height":6,"properties":{"title":"FIRMS fire detections (India bbox, 24h)","region":"${AWS::Region}","stat":"Maximum","period":1800,
+            "metrics":[["Saans","FireDetections","Days","1"]]}},
+          {"type":"log","x":0,"y":18,"width":24,"height":6,"properties":{"title":"Slowest API requests","region":"${AWS::Region}",
+            "query":"SOURCE '${ApiAccessLogGroup}' | fields time, method, path, status, latencyMs | sort latencyMs desc | limit 20"}}
+        ]}
 Outputs:
   ApiBaseUrl:
     Description: API base URL
@@ -117,3 +249,11 @@ Outputs:
     Value: !Ref AirCache
   OpenAqParameterName:
     Value: !Ref OpenAqParameterName
+  FirmsParameterName:
+    Value: !Ref FirmsParameterName
+  DashboardUrl:
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-ops'
+  XRayTracesUrl:
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#xray:traces/query'
+  AuditBucketName:
+    Value: !Ref AuditBucket

@@ -1,57 +1,50 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import { guidanceFor, compass, PROFILES, POLLUTANT_KEYS, pollutantsFor } from './guidance.mjs';
+import { Tracer } from '@aws-lambda-powertools/tracer';
+import { guidanceFor, PROFILES, POLLUTANT_KEYS, pollutantsFor } from './guidance.mjs';
 import { answer } from './assistant.mjs';
+import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFires, upwindFires, INDIA_BBOX, fetchHistory, historyCsv, geocode } from './sources.mjs';
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
-const ssm = new SSMClient({});
+// X-Ray: AWS SDK calls and outbound fetch() show up as subsegments; disabled automatically outside Lambda.
+const tracer = new Tracer({ serviceName: 'saans-api' });
+const ddb = DynamoDBDocumentClient.from(tracer.captureAWSv3Client(new DynamoDBClient({})), { marshallOptions: { removeUndefinedValues: true } });
+const ssm = tracer.captureAWSv3Client(new SSMClient({}));
 const TABLE = process.env.CACHE_TABLE;
-const PARAMETER_NAME = process.env.OPENAQ_PARAMETER_NAME;
 const CACHE_SECONDS = 300;
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const MAX_STATIONS = 8;
 const CANDIDATE_LOCATIONS = 12;
 const MAX_STATION_AGE_MINUTES = 7 * 24 * 60; // older monitors are treated as offline and hidden
-let cachedApiKey;
+const FIRE_DAYS = [1, 3, 7];
+const secrets = {};
 
 function reply(statusCode, body, extra = {}) {
   return { statusCode, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...extra }, body: JSON.stringify(body) };
 }
 
-async function jsonFetch(url, options = {}) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(8000) });
-  if (!response.ok) throw new Error(`Upstream returned ${response.status}`);
-  return response.json();
-}
-
-async function getOpenAqKey() {
-  if (cachedApiKey) return cachedApiKey;
-  if (process.env.OPENAQ_API_KEY) return process.env.OPENAQ_API_KEY; // local dev only; Lambda uses SSM
-  if (!PARAMETER_NAME) return null;
+// Env var for local dev; SSM SecureString in Lambda. Cached per container.
+async function getSecret(envName, parameterName) {
+  if (process.env[envName]) return process.env[envName];
+  if (!parameterName) return null;
+  if (secrets[parameterName]) return secrets[parameterName];
   try {
-    const parameter = await ssm.send(new GetParameterCommand({ Name: PARAMETER_NAME, WithDecryption: true }));
-    cachedApiKey = parameter.Parameter?.Value || null;
-    return cachedApiKey;
+    const parameter = await ssm.send(new GetParameterCommand({ Name: parameterName, WithDecryption: true }));
+    return (secrets[parameterName] = parameter.Parameter?.Value || null);
   } catch (error) {
-    console.error('Unable to read OpenAQ parameter', error.name);
+    console.error('Unable to read parameter', parameterName, error.name);
     return null;
   }
 }
-
-const haversineKm = (a, b) => {
-  const rad = d => d * Math.PI / 180;
-  const dLat = rad(b.latitude - a.latitude), dLon = rad(b.longitude - a.longitude);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.latitude)) * Math.cos(rad(b.latitude)) * Math.sin(dLon / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-};
+const getOpenAqKey = () => getSecret('OPENAQ_API_KEY', process.env.OPENAQ_PARAMETER_NAME);
+const getFirmsKey = () => getSecret('FIRMS_MAP_KEY', process.env.FIRMS_PARAMETER_NAME);
 
 async function fetchStations(latitude, longitude) {
   const key = await getOpenAqKey();
   if (!key) return { state: 'not_configured', stations: [] };
   try {
     const params = new URLSearchParams({ coordinates: `${latitude},${longitude}`, radius: '25000', parameters_id: '2', limit: '100', page: '1' });
-    const list = await jsonFetch(`https://api.openaq.org/v3/locations?${params}`, { headers: { 'X-API-Key': key } });
+    const list = await jsonFetch(`https://api.openaq.org/v3/locations?${params}`, { headers: { 'X-API-Key': key } }, 'openaq');
     const locations = (list.results || []).map(location => {
       const coords = location.coordinates || {};
       const sensors = (location.sensors || []).filter(sensor => String(sensor.parameter?.name || '').toLowerCase().replaceAll('₂', '2').replaceAll('.', '') === 'pm25' || sensor.parameter?.id === 2);
@@ -60,7 +53,7 @@ async function fetchStations(latitude, longitude) {
       .sort((a, b) => a.distanceKm - b.distanceKm).slice(0, CANDIDATE_LOCATIONS);
     const stations = await Promise.all(locations.map(async ({ location, coords, sensors, distanceKm }) => {
       try {
-        const latest = await jsonFetch(`https://api.openaq.org/v3/locations/${location.id}/latest?limit=100&page=1`, { headers: { 'X-API-Key': key } });
+        const latest = await jsonFetch(`https://api.openaq.org/v3/locations/${location.id}/latest?limit=100&page=1`, { headers: { 'X-API-Key': key } }, 'openaq');
         const sensorIds = new Set(sensors.map(sensor => sensor.id));
         const reading = (latest.results || []).filter(item => sensorIds.has(item.sensorsId) && Number.isFinite(item.value))
           .sort((a, b) => Date.parse(b.datetime?.utc || 0) - Date.parse(a.datetime?.utc || 0))[0];
@@ -82,18 +75,7 @@ async function fetchStations(latitude, longitude) {
 
 async function fetchForecast(latitude, longitude) {
   const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), hourly: POLLUTANT_KEYS.join(','), past_hours: '24', forecast_hours: '48', timezone: 'auto' });
-  return jsonFetch(`https://air-quality-api.open-meteo.com/v1/air-quality?${params}`);
-}
-
-async function fetchWind(latitude, longitude) {
-  const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), current: 'wind_speed_10m,wind_direction_10m,wind_gusts_10m',
-    hourly: 'wind_speed_10m,wind_direction_10m', forecast_hours: '24', wind_speed_unit: 'kmh', timezone: 'auto' });
-  const data = await jsonFetch(`https://api.open-meteo.com/v1/forecast?${params}`);
-  const current = data.current || {};
-  return { speedKmh: Math.round(current.wind_speed_10m), gustKmh: Math.round(current.wind_gusts_10m), fromDeg: current.wind_direction_10m,
-    fromCompass: compass(current.wind_direction_10m), observedAt: current.time,
-    hourly: (data.hourly?.time || []).map((time, i) => ({ time, speedKmh: Math.round(data.hourly.wind_speed_10m[i]), fromDeg: data.hourly.wind_direction_10m[i] })),
-    source: 'open_meteo_weather_model' };
+  return jsonFetch(`https://air-quality-api.open-meteo.com/v1/air-quality?${params}`, {}, 'open_meteo_cams');
 }
 
 const median = values => { const s = [...values].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -138,13 +120,24 @@ async function loadCached(key, allowExpired = false) {
   return null;
 }
 
-async function saveCached(key, payload, seconds = CACHE_SECONDS) {
+// memoryOnly: large payloads (fire points) would burn the table's 1 WCU, so they stay in the container.
+async function saveCached(key, payload, seconds = CACHE_SECONDS, memoryOnly = false) {
   const expiresAt = Math.floor(Date.now() / 1000) + seconds;
   if (memoryCache.size > 500) memoryCache.clear();
   memoryCache.set(key, { payload, expiresAt });
-  if (!TABLE) return;
+  if (!TABLE || memoryOnly) return;
   try { await ddb.send(new PutCommand({ TableName: TABLE, Item: { cacheKey: key, payload, cachedAt: new Date().toISOString(), expiresAt } })); }
   catch (error) { console.error('Cache write failed', error.name); }
+}
+
+// Memory first, then the fetcher; records hit/miss per route.
+async function cached(route, key, seconds, fetcher, memoryOnly = false) {
+  const hit = memoryOnly ? memoryCache.get(key)?.expiresAt > Date.now() / 1000 && memoryCache.get(key).payload : await loadCached(key);
+  metric(hit ? 'CacheHit' : 'CacheMiss', 1, 'Count', { Route: route });
+  if (hit) return hit;
+  const payload = await fetcher();
+  await saveCached(key, payload, seconds, memoryOnly);
+  return payload;
 }
 
 function parseCoords(lat, lon) {
@@ -153,14 +146,33 @@ function parseCoords(lat, lon) {
   return { latitude: Math.round(latitude * 100) / 100, longitude: Math.round(longitude * 100) / 100 };
 }
 
+const MAX_FIRE_POINTS = 4000;
+async function getFires(days) {
+  const key = await getFirmsKey();
+  if (!key) return { state: 'not_configured', days, count: 0, byState: [], points: [] };
+  return cached('fires', `fires:v1:${days}`, 1800, async () => {
+    const all = await fetchFires(key, days);
+    metric('FireDetections', all.length, 'Count', { Days: String(days) });
+    // Strongest fires first so the cap drops the faint ones.
+    const points = all.length > MAX_FIRE_POINTS ? [...all].sort((a, b) => b[2] - a[2]).slice(0, MAX_FIRE_POINTS) : all;
+    return { state: 'available', days, fetchedAt: new Date().toISOString(), count: all.length, shown: points.length, bbox: INDIA_BBOX, byState: summariseFires(all), points,
+      source: 'NASA FIRMS VIIRS NOAA-20 NRT (375 m), last 24 h × days, low-confidence detections removed' };
+  }, true);
+}
+
 // Returns { payload, cache } or throws when no provider produced data.
 async function getAir({ latitude, longitude }) {
   const cacheKey = `air:${CACHE_VERSION}:${latitude.toFixed(2)}:${longitude.toFixed(2)}`;
-  const cached = await loadCached(cacheKey);
-  if (cached) return { payload: cached, cache: 'hit' };
-  const [stationResult, forecastResult, windResult] = await Promise.allSettled([fetchStations(latitude, longitude), fetchForecast(latitude, longitude), fetchWind(latitude, longitude)]);
+  const cachedPayload = await loadCached(cacheKey);
+  metric(cachedPayload ? 'CacheHit' : 'CacheMiss', 1, 'Count', { Route: 'air' });
+  if (cachedPayload) return { payload: cachedPayload, cache: 'hit' };
+  // NASA is sometimes slow: don't hold the main answer for it. The fetch keeps going and warms the cache for the next request.
+  const firesSoon = Promise.race([getFires(1), new Promise((_, reject) => setTimeout(() => reject(new Error('FIRMS slow')), 4000).unref())]);
+  const [stationResult, forecastResult, weatherResult, fireResult] = await Promise.allSettled([fetchStations(latitude, longitude), fetchForecast(latitude, longitude), fetchWeather(latitude, longitude), firesSoon]);
   const stationData = stationResult.status === 'fulfilled' ? stationResult.value : { state: 'temporarily_unavailable', stations: [] };
   const forecast = forecastResult.status === 'fulfilled' ? forecastResult.value : { hourly: {}, timezone: 'UTC' };
+  const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
+  const fires = fireResult.status === 'fulfilled' ? fireResult.value : { state: 'temporarily_unavailable', points: [] };
   const hourly = forecast.hourly || {};
   const points = (hourly.time || []).map((time, index) => ({ time, pm2_5: hourly.pm2_5?.[index] ?? null, pm10: hourly.pm10?.[index] ?? null }));
   // Open-Meteo returns local times without an offset; compare in the location's own clock via utc_offset_seconds.
@@ -170,7 +182,7 @@ async function getAir({ latitude, longitude }) {
   const past = points.filter(p => toMs(p.time) < nowLocal - 30 * 60000).map(p => p.pm2_5).filter(Number.isFinite);
   const modelPm = future[0]?.pm2_5 ?? null;
   const stations = flagOutliers(stationData.stations, modelPm);
-  if (!stations.length && !future.length && windResult.status !== 'fulfilled') {
+  if (!stations.length && !future.length && !weather) {
     const stale = await loadCached(cacheKey, true);
     if (stale) return { payload: stale, cache: 'stale' };
     throw new Error('All providers unavailable');
@@ -183,11 +195,13 @@ async function getAir({ latitude, longitude }) {
     guidance: guidanceFor(estimate.pm2_5),
     // Current model hour for every pollutant; PM2.5 uses the same estimate as the headline number.
     pollutants: pollutantsFor({ ...Object.fromEntries(POLLUTANT_KEYS.map(key => [key, hourly[key]?.[points.indexOf(future[0])]])), pm2_5: estimate.pm2_5 }),
-    wind: windResult.status === 'fulfilled' ? windResult.value : null,
-    sources: { stations: stationData.state, forecast: forecastResult.status === 'fulfilled' ? 'open_meteo_cams_model' : 'temporarily_unavailable', wind: windResult.status === 'fulfilled' ? 'open_meteo_weather_model' : 'temporarily_unavailable', labels: { pm2_5: 'PM2.5 concentration' } },
+    weather,
+    fires: fires.state === 'available' && weather ? { state: 'available', days: 1, ...upwindFires(fires.points, { latitude, longitude }, weather.fromDeg) } : { state: fires.state },
+    sources: { stations: stationData.state, forecast: forecastResult.status === 'fulfilled' ? 'open_meteo_cams_model' : 'temporarily_unavailable',
+      weather: weather ? 'open_meteo_weather_model' : 'temporarily_unavailable', fires: fires.state, labels: { pm2_5: 'PM2.5 concentration' } },
     disclaimer: 'PM2.5 monitor observations and model forecasts are shown as separate sources. This is not an official CPCB National AQI; official AQI requires pollutant-specific averaging and sub-indices. This service does not provide medical advice.' };
   // A provider outage (e.g. OpenAQ rate limit) is cached briefly so it recovers quickly.
-  const degraded = stationData.state === 'temporarily_unavailable' || forecastResult.status !== 'fulfilled' || windResult.status !== 'fulfilled';
+  const degraded = stationData.state === 'temporarily_unavailable' || forecastResult.status !== 'fulfilled' || !weather || fires.state === 'temporarily_unavailable';
   await saveCached(cacheKey, payload, degraded ? 60 : CACHE_SECONDS);
   return { payload, cache: 'miss' };
 }
@@ -197,10 +211,14 @@ function parseBody(event) {
   catch { return null; }
 }
 
-export const handler = async event => {
+const unavailable = () => reply(502, { error: 'upstream_unavailable', message: 'Live data is temporarily unavailable. Please retry shortly.' });
+
+async function route(event) {
   const method = event.requestContext?.http?.method || event.httpMethod;
   if (method === 'OPTIONS') return reply(204, {});
   const path = event.rawPath || event.path || '';
+  const query = event.queryStringParameters || {};
+  tracer.putAnnotation('route', path.split('/').pop() || 'root');
   if (path.endsWith('/health')) return reply(200, { status: 'ok', service: 'saans-api', time: new Date().toISOString(), assistant: process.env.BEDROCK_MODEL_ID ? 'bedrock' : 'rules' });
 
   if (path.endsWith('/ask')) {
@@ -214,22 +232,72 @@ export const handler = async event => {
     const place = typeof body.place === 'string' ? body.place.slice(0, 60) : '';
     try {
       const { payload } = await getAir(coords);
-      return reply(200, await answer(question, payload, { profile, lang, place }));
+      const result = await answer(question, payload, { profile, lang, place });
+      metric('AskAnswered', 1, 'Count', { Mode: result.mode });
+      tracer.putAnnotation('askMode', result.mode);
+      return reply(200, result);
     } catch (error) {
       console.error('Ask failed', error.name);
-      return reply(502, { error: 'upstream_unavailable', message: 'Live air data is temporarily unavailable. Please retry shortly.' });
+      return unavailable();
     }
   }
 
-  if (method !== 'GET' || !path.endsWith('/air')) return reply(404, { error: 'not_found' });
-  const query = event.queryStringParameters || {};
+  if (method !== 'GET') return reply(404, { error: 'not_found' });
+
+  if (path.endsWith('/geocode')) {
+    const q = String(query.q || '').trim();
+    if (q.length < 2 || q.length > 60) return reply(400, { error: 'invalid_query', message: 'Provide q with 2 to 60 characters.' });
+    try {
+      const results = await cached('geocode', `geo:v1:${q.toLowerCase()}`, 86400, () => geocode(q), true);
+      return reply(200, { query: q, results, source: 'open_meteo_geocoding' }, { 'cache-control': 'public, max-age=86400' });
+    } catch (error) { console.error('Geocode failed', error.message); return unavailable(); }
+  }
+
+  if (path.endsWith('/fires')) {
+    const days = FIRE_DAYS.includes(Number(query.days)) ? Number(query.days) : 1;
+    try {
+      const fires = await getFires(days);
+      return reply(200, fires, fires.state === 'available' ? { 'cache-control': 'public, max-age=600' } : {});
+    } catch (error) { console.error('Fires failed', error.message); return unavailable(); }
+  }
+
   const coords = parseCoords(query.lat, query.lon);
   if (!coords) return reply(400, { error: 'invalid_coordinates', message: 'Provide lat and lon within valid WGS84 bounds.' });
+
+  if (path.endsWith('/history')) {
+    const days = Math.min(92, Math.max(7, Math.round(Number(query.days) || 30)));
+    try {
+      const history = await cached('history', `hist:v1:${coords.latitude}:${coords.longitude}:${days}`, 6 * 3600, () => fetchHistory(coords.latitude, coords.longitude, days));
+      if (query.format === 'csv') return { statusCode: 200, headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="saans-history-${coords.latitude}-${coords.longitude}-${days}d.csv"` }, body: historyCsv(history) };
+      return reply(200, history, { 'cache-control': 'public, max-age=3600' });
+    } catch (error) { console.error('History failed', error.message); return unavailable(); }
+  }
+
+  if (!path.endsWith('/air')) return reply(404, { error: 'not_found' });
   try {
     const { payload, cache } = await getAir(coords);
     return reply(200, { ...payload, cache, ...(cache === 'stale' && { warning: 'Live providers are unavailable; showing the last cached response.' }) }, cache === 'stale' ? {} : { 'cache-control': 'public, max-age=120' });
   } catch (error) {
     console.error('Air endpoint failed', error.name);
-    return reply(502, { error: 'upstream_unavailable', message: 'Live air data is temporarily unavailable. Please retry shortly.' });
+    return unavailable();
+  }
+}
+
+// Manual Powertools pattern: annotations need a subsegment because the Lambda facade segment is read-only.
+export const handler = async event => {
+  if (!tracer.isTracingEnabled()) return route(event);
+  const segment = tracer.getSegment();
+  const subsegment = segment?.addNewSubsegment('## handler');
+  if (subsegment) tracer.setSegment(subsegment);
+  tracer.annotateColdStart();
+  try {
+    const result = await route(event);
+    tracer.putAnnotation('status', result.statusCode);
+    return result;
+  } catch (error) {
+    tracer.addErrorAsMetadata(error);
+    throw error;
+  } finally {
+    if (subsegment) { subsegment.close(); tracer.setSegment(segment); }
   }
 };
