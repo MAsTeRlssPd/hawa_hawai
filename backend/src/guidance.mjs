@@ -64,6 +64,25 @@ const EXTRAS = {
     [1, 'Carry your reliever inhaler or medicines when you go out.', 'बाहर जाते समय अपना इनहेलर या दवाएँ साथ रखें।']]
 };
 export const PROFILES = ['general', 'outdoor_worker', 'commuter', 'athlete', 'children', 'older', 'pregnant', 'heart_lung'];
+// Health conditions the user can add on top of a persona; their extras stack on the persona's actions.
+const CONDITION_EXTRAS = {
+  asthma: [
+    [0, 'Keep your reliever inhaler with you and follow your asthma action plan.', 'अपना रिलीवर इनहेलर साथ रखें और अपनी अस्थमा कार्ययोजना का पालन करें।'],
+    [3, 'If you need your reliever more often than usual, speak to your doctor.', 'अगर रिलीवर की ज़रूरत सामान्य से ज़्यादा पड़े तो डॉक्टर से बात करें।']],
+  copd: [
+    [1, 'Keep your medicines and any oxygen plan ready; pace yourself outdoors.', 'अपनी दवाएँ और ऑक्सीजन योजना तैयार रखें; बाहर धीरे-धीरे चलें।'],
+    [3, 'Watch for more breathlessness, cough or phlegm than usual and contact your doctor early.', 'साँस फूलना, खाँसी या बलगम सामान्य से ज़्यादा हो तो जल्दी डॉक्टर से संपर्क करें।']],
+  allergy: [
+    [0, 'Coarse dust (PM10) is your main trigger: watch the PM10 level as well as PM2.5.', 'मोटी धूल (PM10) आपके लिए मुख्य ट्रिगर है: PM2.5 के साथ PM10 स्तर भी देखें।'],
+    [1, 'Wash your face and change clothes after dusty outdoor time; wet-mop instead of sweeping.', 'धूल भरे बाहर के समय के बाद चेहरा धोएँ और कपड़े बदलें; झाड़ू की जगह गीला पोछा लगाएँ।'],
+    [3, 'Wraparound glasses and a well-fitted mask cut dust reaching your eyes and nose.', 'चारों ओर से ढकने वाला चश्मा और अच्छी तरह फिट मास्क आँखों और नाक तक धूल कम पहुँचने देते हैं।']],
+  heart: [
+    [1, 'Avoid hard exertion near traffic.', 'ट्रैफ़िक के पास भारी मेहनत से बचें।'],
+    [2, 'Stop and rest if you feel chest pain, palpitations or unusual breathlessness, and seek care if it does not settle.', 'सीने में दर्द, धड़कन तेज़ होने या असामान्य साँस फूलने पर रुककर आराम करें, और ठीक न हो तो चिकित्सा सहायता लें।']],
+  diabetes: [
+    [2, 'Polluted air adds strain on the heart and blood vessels in diabetes: keep exercise indoors on bad-air days rather than skipping it.', 'डायबिटीज़ में प्रदूषित हवा हृदय और रक्त वाहिकाओं पर दबाव बढ़ाती है: ख़राब हवा के दिन व्यायाम छोड़ें नहीं, घर के अंदर करें।']]
+};
+export const CONDITIONS = Object.keys(CONDITION_EXTRAS);
 
 export function bandFor(pm) {
   if (!Number.isFinite(pm)) return null;
@@ -72,10 +91,11 @@ export function bandFor(pm) {
   return { ...band, index };
 }
 
-export function actionsFor(index, profile = 'general') {
+export function actionsFor(index, profile = 'general', conditions = []) {
   const set = ACTIONS[index][SENSITIVE.includes(profile) ? 1 : 0];
   const hasMask = set.en.some(text => text.includes('N95'));
-  const extras = (EXTRAS[profile] || []).filter(([from, en]) => index >= from && !(hasMask && en.includes('N95')));
+  const extras = [...(EXTRAS[profile] || []), ...conditions.flatMap(c => CONDITION_EXTRAS[c] || [])]
+    .filter(([from, en]) => index >= from && !(hasMask && en.includes('N95')));
   return { en: [...set.en, ...extras.map(x => x[1])], hi: [...set.hi, ...extras.map(x => x[2])] };
 }
 
@@ -96,6 +116,7 @@ const POLLUTANTS = [
     about: { en: 'From coal burning and industry. It can narrow the airways, especially in people with asthma.', hi: 'कोयला जलने और उद्योगों से। यह साँस की नली को सिकोड़ सकती है, ख़ासकर अस्थमा वाले लोगों में।' } }
 ];
 export const POLLUTANT_KEYS = POLLUTANTS.map(p => p.key);
+export const POLLUTANT_NAMES = Object.fromEntries(POLLUTANTS.map(p => [p.key, p.name]));
 
 export function pollutantsFor(values) {
   return POLLUTANTS.filter(p => Number.isFinite(values[p.key])).map(({ limits, scale = 1, ...p }) => {
@@ -107,10 +128,65 @@ export function pollutantsFor(values) {
   });
 }
 
+// ---- CPCB National AQI, ported from mansi724/AQI-FORECASTING (build_gnn_dataset.py) ----
+// CPCB-anchored monthly bias factors for CAMS PM (fitted on Delhi CPCB stations), Jan..Dec.
+const PM25_FACTOR = [1.30, 1.10, 0.65, 0.65, 0.65, 0.75, 1.00, 1.00, 1.00, 1.10, 1.30, 1.35];
+const PM10_FACTOR = [1.50, 1.40, 0.45, 0.45, 0.45, 0.60, 0.90, 0.90, 0.90, 0.95, 1.40, 1.70];
+const AQI_TOP = { pm2_5: 500, pm10: 600, nitrogen_dioxide: 600, ozone: 1000, carbon_monoxide: 50, sulphur_dioxide: 2000 };
+const AQI_STEPS = [0, 50, 100, 200, 300, 400, 500];
+// Conformal 80% half-widths (AQI points) from the ward GNN's calibration (models/checkpoints/conformal.json).
+export const CONFORMAL_DELTA = { 24: 19.03, 48: 26.97, 72: 30.84 };
+
+// Piecewise-linear sub-index, clamped at 500 like np.interp.
+export function subIndex(key, conc) {
+  const p = POLLUTANTS.find(x => x.key === key);
+  const bp = [0, ...p.limits, AQI_TOP[key]];
+  if (conc >= bp.at(-1)) return 500;
+  const i = bp.findIndex((b, j) => conc <= bp[j + 1]);
+  return AQI_STEPS[i] + (conc - bp[i]) / (bp[i + 1] - bp[i]) * (AQI_STEPS[i + 1] - AQI_STEPS[i]);
+}
+
+export function aqiBandFor(aqi) {
+  if (!Number.isFinite(aqi)) return null;
+  const found = AQI_STEPS.slice(1, 6).findIndex(max => aqi <= max);
+  const index = found < 0 ? 5 : found;
+  const { max, ...band } = BANDS[index];
+  return { ...band, index };
+}
+
+// hourly: Open-Meteo arrays (pm in µg/m³, CO in µg/m³). pmScale: per-hour PM2.5 multiplier, or null for the monthly factor.
+// Rolling 24 h mean (8 h for O3/CO) with 16/6 h minimum; AQI = max sub-index, needing PM and at least 3 pollutants.
+export function aqiSeries(hourly, pmScale = null) {
+  const time = hourly.time || [];
+  const month = i => Number(time[i].slice(5, 7)) - 1;
+  const series = {
+    pm2_5: (hourly.pm2_5 || []).map((v, i) => v == null ? null : v * (pmScale ?? PM25_FACTOR[month(i)])),
+    pm10: (hourly.pm10 || []).map((v, i) => v == null ? null : v * PM10_FACTOR[month(i)]),
+    nitrogen_dioxide: hourly.nitrogen_dioxide || [], sulphur_dioxide: hourly.sulphur_dioxide || [],
+    ozone: hourly.ozone || [], carbon_monoxide: (hourly.carbon_monoxide || []).map(v => v == null ? null : v / 1000)
+  };
+  return time.map((t, i) => {
+    const subs = {};
+    for (const [key, values] of Object.entries(series)) {
+      const [win, min] = key === 'ozone' || key === 'carbon_monoxide' ? [8, 6] : [24, 16];
+      const window = values.slice(Math.max(0, i - win + 1), i + 1).filter(Number.isFinite);
+      if (window.length >= min) subs[key] = Math.round(subIndex(key, window.reduce((a, b) => a + b, 0) / window.length));
+    }
+    const keys = Object.keys(subs);
+    if (!(('pm2_5' in subs) || ('pm10' in subs)) || keys.length < 3) return { time: t, aqi: null };
+    const dominant = keys.reduce((a, b) => subs[b] > subs[a] ? b : a);
+    return { time: t, aqi: subs[dominant], dominant, subIndices: subs };
+  });
+}
+
 export function guidanceFor(pm) {
   const band = bandFor(pm);
   if (!band) return null;
-  return { band, actions: Object.fromEntries(PROFILES.map(p => [p, actionsFor(band.index, p)])), source: CPCB_SOURCE,
+  const conditionActions = Object.fromEntries(CONDITIONS.map(c => {
+    const extras = CONDITION_EXTRAS[c].filter(([from]) => band.index >= from);
+    return [c, { en: extras.map(x => x[1]), hi: extras.map(x => x[2]) }];
+  }));
+  return { band, actions: Object.fromEntries(PROFILES.map(p => [p, actionsFor(band.index, p)])), conditionActions, source: CPCB_SOURCE,
     note: 'Indicative: CPCB PM2.5 breakpoints are defined for 24-hour averages. Not medical advice.' };
 }
 

@@ -1,5 +1,5 @@
 // Health page: an animated lung showing where each pollutant lands, and what it does short and long term.
-// Loaded before app.js; uses its globals (lastData, ui, langKey, PERSONAS, selectedProfile, safeText) at render time.
+// Loaded before app.js; uses its globals (lastData, ui, langKey, PERSONAS, selectedProfile, affectsMe, safeText) at render time.
 
 const ZONES = {
   upper: { en: 'Nose & throat', hi: 'नाक और गला', y: 34, tx: 210, ty: 36 },
@@ -173,7 +173,7 @@ function renderHealth() {
   }).join('');
   const ratio = p && Number.isFinite(p.value) ? p.value / copy.who : null;
   const whoText = ratio == null ? '' : ratio > 1.05 ? t.who(ratio.toFixed(1), `${copy.who} ${p.unit}`, copy.whoNote) : t.underWho;
-  const mine = p?.affects.includes(selectedProfile);
+  const mine = p && affectsMe(p);
   const list = items => `<ul>${items.map(x => `<li>${safeText(x)}</li>`).join('')}</ul>`;
   const pm = lastData?.estimate?.pm2_5;
   const vol = BREATH_M3[selectedProfile] || 14;

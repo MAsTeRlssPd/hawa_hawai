@@ -1,0 +1,13 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "saans-gnn"
+resolve_s3 = true
+resolve_image_repos = true
+s3_prefix = "saans-gnn"
+region = "ap-south-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[default.global.parameters]
+region = "ap-south-1"

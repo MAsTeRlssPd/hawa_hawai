@@ -32,7 +32,25 @@ Globals:
         FIRMS_PARAMETER_NAME: !Ref FirmsParameterName
         POWERTOOLS_SERVICE_NAME: saans-api
         BEDROCK_MODEL_ID: !Ref BedrockModelId
+        FORECAST_BUCKET: !Ref ForecastBucket
 Resources:
+  # Delhi ward GNN forecasts land here hourly from the separate gnn/ stack (container Lambda).
+  ForecastBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'saans-forecast-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
   AirCache:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -92,6 +110,9 @@ Resources:
               Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
             # Cross-region inference profiles route to foundation models in other regions of the same geography.
             - Effect: Allow
+              Action: [s3:GetObject]
+              Resource: !Sub '${ForecastBucket.Arn}/ward-forecast/*'
+            - Effect: Allow
               Action: [bedrock:InvokeModel]
               Resource:
                 - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*'
@@ -132,6 +153,18 @@ Resources:
           Properties:
             ApiId: !Ref AirApi
             Path: /v1/geocode
+            Method: GET
+        Explain:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/explain
+            Method: GET
+        WardForecast:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/ward-forecast
             Method: GET
   AirDataLogGroup:
     Type: AWS::Logs::LogGroup
@@ -235,13 +268,16 @@ Resources:
           {"type":"metric","x":0,"y":12,"width":8,"height":6,"properties":{"title":"Cache hits vs misses (air)","region":"${AWS::Region}","stat":"Sum","period":300,
             "metrics":[["Saans","CacheHit","Route","air"],[".","CacheMiss",".","."]]}},
           {"type":"metric","x":8,"y":12,"width":8,"height":6,"properties":{"title":"Ask Saans answers by mode","region":"${AWS::Region}","stat":"Sum","period":300,
-            "metrics":[["Saans","AskAnswered","Mode","bedrock"],["...","rules"]]}},
+            "metrics":[["Saans","AskAnswered","Mode","bedrock"],["...","rules"],[".","ExplainAnswered",".","bedrock"],["...","rules"]]}},
           {"type":"metric","x":16,"y":12,"width":8,"height":6,"properties":{"title":"FIRMS fire detections (India bbox, 24h)","region":"${AWS::Region}","stat":"Maximum","period":1800,
             "metrics":[["Saans","FireDetections","Days","1"]]}},
           {"type":"log","x":0,"y":18,"width":24,"height":6,"properties":{"title":"Slowest API requests","region":"${AWS::Region}",
             "query":"SOURCE '${ApiAccessLogGroup}' | fields time, method, path, status, latencyMs | sort latencyMs desc | limit 20"}}
         ]}
 Outputs:
+  ForecastBucketName:
+    Description: Pass to the gnn/ stack as ForecastBucket
+    Value: !Ref ForecastBucket
   ApiBaseUrl:
     Description: API base URL
     Value: !Sub 'https://${AirApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/prod'

@@ -7,10 +7,13 @@ Saans helps people understand local air conditions and plan around changes. The 
 - Welcome overview, name entry, then the Saans dashboard.
 - Overview adds a 30/90-day history chart (CAMS PM2.5 bars, ERA5 peak ventilation line) with a simple backtest and a CSV download.
 - Airspace shows nearby PM2.5 stations on an OpenStreetMap (Leaflet) map, numbered to match the list and coloured by CPCB band, plus freshness and an hourly forecast.
-- Guidance groups household-oriented explainers and profile-aware guidance.
+- Today leads with an indicative AQI circle (CPCB method, dominant pollutant) and a 24/48/72 h outlook with 80% ranges.
+- Overview charts are hoverable (time, PM2.5, AQI); unusual hours/days are dotted and explained by Bedrock (or weather rules). Inside Delhi a ward card shows the GNN forecast.
+- Airspace has a legend for every CPCB band (PM2.5 and AQI ranges, health impact, what changes as the air worsens).
+- Health & guidance merges persona and condition actions (asthma, COPD, dust allergy, heart disease, diabetes), indoor-air tips (HEPA sizing by CADR, ventilation timing, smoke, cooking, dust, CO, ozone, an honest note on plants) and the lung explainer. Old `#guidance` links redirect.
 - Health shows an animated lung for each pollutant (PM2.5, PM10, NO2, O3, CO, SO2): where it deposits (nose/throat, trachea, bronchi, bronchioles, alveoli, blood), short- and long-term effects, the multiple of the WHO 2021 guideline, a persona risk line, and dose figures (cigarette equivalent, air breathed per day, AQLI life-years).
 - Area watch shows live weather (temperature, humidity, mixing height, IMD ventilation index) and NASA FIRMS fire hotspots for India over 1/3/7 days, with the 500 km upwind zone drawn from the current wind.
-- More includes settings, English/Hindi UI options, reduced motion, geolocation, a place search for any Indian locality (Open-Meteo geocoding), how-to guidance, and data-source notes.
+- More is a list page (profile card, language, location, city, health profile, reduce motion, how-to, data and privacy, replay welcome) and includes English/Hindi UI options, reduced motion, geolocation, a place search for any Indian locality (Open-Meteo geocoding), how-to guidance, and data-source notes.
 - PWA install support and a service worker provide the installable app shell.
 
 The selectable locations are city presets, not a claim that every area has nearby monitors. The dashboard can also request the device's coordinates after the user chooses to share them.
@@ -26,15 +29,18 @@ Saans now separates OpenAQ station observations from Open-Meteo/CAMS model forec
 - `GET /v1/fires?days=1|3|7` returns NASA FIRMS VIIRS (NOAA-20) hotspots over India and border areas from the last 24 h × days (low-confidence rows dropped), counts by state, and up to 4000 points ranked by fire power. Cached 30 minutes in memory.
 - `GET /v1/history?lat&lon&days=7..92[&format=csv]` returns daily ERA5 weather (temperature, humidity, wind, rain, peak boundary layer, peak ventilation) joined with daily CAMS PM2.5, plus a backtest (stagnant vs. ventilated days, correlation). Cached 6 hours. `format=csv` downloads it for training.
 - `GET /v1/geocode?q=Lajpat Nagar` returns Indian place matches (Open-Meteo geocoding). Cached 1 day.
-- `POST /v1/ask` with `{question, lat, lon, profile, lang, place}` answers questions from the same live data and CPCB guidance. It uses Amazon Bedrock (`BedrockModelId` parameter) when enabled and falls back to deterministic rule-based answers otherwise; the response says which (`mode`).
+- `/v1/air` also returns `aqi`: an indicative CPCB-method AQI (24 h rolling means, 8 h for O3/CO, max sub-index) on CAMS data with PM bias-corrected by nearby stations or CPCB-anchored monthly factors, its dominant pollutant, and a 24/48/72 h outlook with conformal ranges. Forecast points carry `aqi`. It is not the official CPCB AQI.
+- `GET /v1/explain?lat&lon&kind=forecast|history&days=30|90&lang` flags unusual hours/days (|z| ≥ 1.5 or a sharp jump) and explains them from mixing height, wind, rain and upwind fires, via Bedrock when enabled, rules otherwise (`mode`).
+- `GET /v1/ward-forecast[?lat&lon]` serves the latest Delhi ward forecast (289 wards, AQI p10/p50/p90 at 24/48/72 h) written to the `ForecastBucket` by the separate `gnn/` stack; `nearest` is set within 6 km of a ward. `WARD_FORECAST_FILE` points the local server at a JSON file instead.
+- `POST /v1/ask` with `{question, lat, lon, profile, conditions, history, lang, place}` (history = last 8 turns) answers questions from the same live data and CPCB guidance. It uses Amazon Bedrock (`BedrockModelId` parameter) when enabled and falls back to deterministic rule-based answers otherwise; the response says which (`mode`).
 - Responses are cached for 5 minutes in DynamoDB and in memory; a payload with a provider outage is cached for only 60 seconds.
 - OpenAQ is optional until you add its key. The forecast endpoint works without it.
 - The dashboard calls the API only after `frontend-config.js` has an API base URL. It does not show sample readings as real data.
 - Personas are chosen on the name screen: office/indoor, construction/outdoor worker, delivery rider/commuter, runner, child/parent, elderly, pregnant, heart/lung condition. They change the Today alerts, guidance and assistant answers, and stay on the device.
 - Observability: Lambda and API run with AWS X-Ray active tracing (Powertools Tracer; DynamoDB, SSM and Bedrock calls appear as subsegments, with cold-start and status annotations). The handler writes CloudWatch embedded metrics in the `Saans` namespace (`ProviderLatency`, `ProviderError`, `CacheHit`, `CacheMiss`, `AskAnswered`, `FireDetections`). The stack adds JSON API access logs (14 days), a `saans-ops` CloudWatch dashboard, and a CloudTrail trail (management events plus Lambda data events for the API function) writing to an encrypted S3 bucket with 90-day expiry. Outputs: `DashboardUrl`, `XRayTracesUrl`, `AuditBucketName`.
-- The app is split into pages (Today, Overview, Airspace, Guidance, Health, Area watch, More) routed by the URL hash. Today shows notification-style alerts for the persona and the current PM2.5, PM10, NO2, O3, CO and SO2 levels (CAMS model, CPCB breakpoints, indicative) with how each affects that persona.
+- The app is split into pages (Today, Overview, Airspace, Health & guidance, Area watch, More) routed by the URL hash. Today shows notification-style alerts for the persona and the current PM2.5, PM10, NO2, O3, CO and SO2 levels (CAMS model, CPCB breakpoints, indicative) with how each affects that persona.
 
-Saans currently displays PM2.5 concentration in µg/m³. It does **not** calculate or present an official CPCB National AQI. CPCB AQI requires pollutant-specific averages and sub-indices; a PM2.5-only estimate is not sufficient. The displayed spread is a simple estimate range, not a validated confidence interval.
+Saans shows PM2.5 concentration in µg/m³ and an **indicative** AQI computed with the CPCB method on model data. It is not the official CPCB National AQI, which uses certified monitor data. The displayed spread is a simple estimate range, not a validated confidence interval.
 
 ## Run locally (no AWS)
 
@@ -68,6 +74,16 @@ window.SAANS_API_BASE = 'https://YOUR_API_ID.execute-api.ap-south-1.amazonaws.co
 
 Serve the website locally for development, or host the root files on HTTPS (for example, AWS Amplify Hosting). A service worker and install prompt require localhost or HTTPS. The public website files are `index.html`, `styles.css`, `health.js`, `app.js`, `frontend-config.js`, `manifest.webmanifest`, `icon.svg`, and `sw.js`.
 
+## Delhi ward GNN forecaster (optional, separate stack)
+
+`gnn/` packages the WardGraphTransformer from [mansi724/PROJECT-AQI](https://github.com/mansi724/PROJECT-AQI) (pinned commit) as an x86_64 container Lambda that runs hourly (EventBridge Scheduler), fetches fresh CAMS + weather, and writes `ward-forecast/latest.json` to the main stack's `ForecastBucket`. Needs Docker. About 70 s and 1.4 GB per run.
+
+```sh
+cd gnn && sam build && sam deploy --parameter-overrides ForecastBucket=<ForecastBucketName output>
+```
+
+Run once locally from a PROJECT-AQI checkout (its requirements installed): `PYTHONPATH=. python <saans>/gnn/forecast.py out.json`.
+
 ## Keys and values to add
 
 1. **AWS credentials/profile** with permission to deploy the SAM stack and create Lambda, API Gateway, DynamoDB, IAM roles and Systems Manager parameters. Keep the account and region you choose consistent for deploy and key setup.
@@ -87,8 +103,8 @@ Serve the website locally for development, or host the root files on HTTPS (for 
    ```
 
    Until set, Area watch still shows the upwind zone and says the hotspot layer needs a key.
-6. **Bedrock model access and budget approval** only if you later choose to build the RAG assistant. It is not enabled in this low-cost path and Bedrock token usage is chargeable.
+6. **Bedrock model access** for the chat and chart explanations (`BedrockModelId`, default `apac.amazon.nova-lite-v1:0`). Without it both fall back to rule-based answers. Token usage is chargeable.
 
 ## Scope still required for the full Saans plan
 
-This is the live-data/API foundation, not the complete feature set in the idea document. User accounts and saved profiles, alert subscriptions, smoke trajectories (the upwind wedge is a straight-line heuristic, not HYSPLIT), historical station reliability, a trained/validated gap-fill and AQI forecast model, reviewed multilingual health rules and citations, Bedrock RAG/guardrails, and production hosting/domain monitoring still need implementation and data validation. Do not present the current PM2.5 spread as model confidence, or PM2.5 concentration as CPCB AQI. Health effects on the Health page are general WHO/EPA summaries, not medical advice.
+This is the live-data/API foundation, not the complete feature set in the idea document. User accounts and saved profiles, alert subscriptions, smoke trajectories (the upwind wedge is a straight-line heuristic, not HYSPLIT), historical station reliability, a validated gap-fill model outside Delhi, reviewed multilingual health rules and citations, Bedrock RAG/guardrails, and production hosting/domain monitoring still need implementation and data validation. Do not present the current PM2.5 spread as model confidence, or the indicative AQI as the official CPCB AQI. Health effects on the Health page are general WHO/EPA summaries, not medical advice.

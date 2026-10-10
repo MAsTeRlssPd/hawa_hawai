@@ -1,18 +1,21 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { readFile } from 'node:fs/promises';
 import { Tracer } from '@aws-lambda-powertools/tracer';
-import { guidanceFor, PROFILES, POLLUTANT_KEYS, pollutantsFor } from './guidance.mjs';
-import { answer } from './assistant.mjs';
+import { guidanceFor, PROFILES, CONDITIONS, POLLUTANT_KEYS, pollutantsFor, aqiSeries, aqiBandFor, CONFORMAL_DELTA, POLLUTANT_NAMES } from './guidance.mjs';
+import { answer, explainSeries } from './assistant.mjs';
 import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFires, upwindFires, INDIA_BBOX, fetchHistory, historyCsv, geocode } from './sources.mjs';
 
 // X-Ray: AWS SDK calls and outbound fetch() show up as subsegments; disabled automatically outside Lambda.
 const tracer = new Tracer({ serviceName: 'saans-api' });
 const ddb = DynamoDBDocumentClient.from(tracer.captureAWSv3Client(new DynamoDBClient({})), { marshallOptions: { removeUndefinedValues: true } });
 const ssm = tracer.captureAWSv3Client(new SSMClient({}));
+const s3 = tracer.captureAWSv3Client(new S3Client({}));
 const TABLE = process.env.CACHE_TABLE;
 const CACHE_SECONDS = 300;
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const MAX_STATIONS = 8;
 const CANDIDATE_LOCATIONS = 12;
 const MAX_STATION_AGE_MINUTES = 7 * 24 * 60; // older monitors are treated as offline and hidden
@@ -74,7 +77,7 @@ async function fetchStations(latitude, longitude) {
 }
 
 async function fetchForecast(latitude, longitude) {
-  const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), hourly: POLLUTANT_KEYS.join(','), past_hours: '24', forecast_hours: '48', timezone: 'auto' });
+  const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), hourly: POLLUTANT_KEYS.join(','), past_hours: '24', forecast_hours: '96', timezone: 'auto' });
   return jsonFetch(`https://air-quality-api.open-meteo.com/v1/air-quality?${params}`, {}, 'open_meteo_cams');
 }
 
@@ -140,6 +143,16 @@ async function cached(route, key, seconds, fetcher, memoryOnly = false) {
   return payload;
 }
 
+// Delhi ward GNN forecast, written hourly to S3 by the gnn/ container Lambda (a local file in dev).
+async function getWardForecast() {
+  return cached('wards', 'wards:v1', 600, async () => {
+    if (process.env.WARD_FORECAST_FILE) return JSON.parse(await readFile(process.env.WARD_FORECAST_FILE, 'utf8'));
+    if (!process.env.FORECAST_BUCKET) return null;
+    const object = await s3.send(new GetObjectCommand({ Bucket: process.env.FORECAST_BUCKET, Key: 'ward-forecast/latest.json' }));
+    return JSON.parse(await object.Body.transformToString());
+  }, true);
+}
+
 function parseCoords(lat, lon) {
   const latitude = Number(lat), longitude = Number(lon);
   if (lat === undefined || lat === '' || lon === undefined || lon === '' || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
@@ -188,9 +201,22 @@ async function getAir({ latitude, longitude }) {
     throw new Error('All providers unavailable');
   }
   const estimate = makeEstimate(stations, modelPm);
+  const nowIndex = points.indexOf(future[0]);
+  // Fresh stations calibrate the model's PM2.5 directly; otherwise the monthly CPCB-anchored factor applies.
+  const pmScale = estimate.stationCount && modelPm > 0 ? Math.min(3, Math.max(1 / 3, estimate.pm2_5 / modelPm)) : null;
+  const aqiHours = aqiSeries(hourly, pmScale);
+  const aqiNow = aqiHours[nowIndex];
+  const aqi = aqiNow?.aqi == null ? null : { value: aqiNow.aqi, band: aqiBandFor(aqiNow.aqi), dominant: aqiNow.dominant, dominantName: POLLUTANT_NAMES[aqiNow.dominant], subIndices: aqiNow.subIndices,
+    method: pmScale ? 'cpcb_rolling_station_scaled_cams' : 'cpcb_rolling_bias_corrected_cams',
+    outlook: [24, 48, 72].map(h => aqiHours[nowIndex + h]).map((p, k) => {
+      const h = [24, 48, 72][k];
+      return p?.aqi == null ? null : { hours: h, time: p.time, aqi: p.aqi, low: Math.max(0, Math.round(p.aqi - CONFORMAL_DELTA[h])), high: Math.round(p.aqi + CONFORMAL_DELTA[h]), band: aqiBandFor(p.aqi), dominant: p.dominant };
+    }).filter(Boolean),
+    note: 'Indicative AQI: CPCB method (24 h averages, 8 h for O3/CO, max sub-index) on CAMS model data, PM bias-corrected with CPCB-anchored monthly factors or nearby monitors. Outlook ranges are the 80% conformal widths calibrated for the Delhi ward model. Not the official CPCB AQI.' };
   const payload = { location: { latitude, longitude, timezone: forecast.timezone || 'UTC' },
     observedAt: new Date().toISOString(), estimate, stations,
-    forecast: future.slice(0, 48),
+    forecast: future.slice(0, 48).map((p, k) => ({ ...p, aqi: aqiHours[nowIndex + k]?.aqi ?? null })),
+    aqi,
     model: { nowPm2_5: modelPm, past24hMeanPm2_5: past.length ? Math.round(past.reduce((a, b) => a + b, 0) / past.length * 10) / 10 : null },
     guidance: guidanceFor(estimate.pm2_5),
     // Current model hour for every pollutant; PM2.5 uses the same estimate as the headline number.
@@ -230,9 +256,11 @@ async function route(event) {
     const profile = PROFILES.includes(body.profile) ? body.profile : 'general';
     const lang = body.lang === 'hi' ? 'hi' : 'en';
     const place = typeof body.place === 'string' ? body.place.slice(0, 60) : '';
+    const conditions = Array.isArray(body.conditions) ? body.conditions.filter(c => CONDITIONS.includes(c)) : [];
+    const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
     try {
       const { payload } = await getAir(coords);
-      const result = await answer(question, payload, { profile, lang, place });
+      const result = await answer(question, payload, { profile, lang, place, conditions, history });
       metric('AskAnswered', 1, 'Count', { Mode: result.mode });
       tracer.putAnnotation('askMode', result.mode);
       return reply(200, result);
@@ -261,6 +289,17 @@ async function route(event) {
     } catch (error) { console.error('Fires failed', error.message); return unavailable(); }
   }
 
+  if (path.endsWith('/ward-forecast')) {
+    try {
+      const data = await getWardForecast();
+      if (!data) return reply(200, { state: 'not_configured' });
+      const near = parseCoords(query.lat, query.lon);
+      // Only answer "your ward" inside Delhi: the nearest ward centroid must be within 6 km.
+      const nearest = near && data.wards.map(w => ({ ...w, distanceKm: Math.round(haversineKm(near, { latitude: w.lat, longitude: w.lon }) * 10) / 10 })).sort((a, b) => a.distanceKm - b.distanceKm)[0];
+      return reply(200, { state: 'available', ...data, nearest: nearest?.distanceKm <= 6 ? nearest : null }, { 'cache-control': 'public, max-age=600' });
+    } catch (error) { console.error('Ward forecast failed', error.name); return reply(200, { state: 'temporarily_unavailable' }); }
+  }
+
   const coords = parseCoords(query.lat, query.lon);
   if (!coords) return reply(400, { error: 'invalid_coordinates', message: 'Provide lat and lon within valid WGS84 bounds.' });
 
@@ -271,6 +310,27 @@ async function route(event) {
       if (query.format === 'csv') return { statusCode: 200, headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="saans-history-${coords.latitude}-${coords.longitude}-${days}d.csv"` }, body: historyCsv(history) };
       return reply(200, history, { 'cache-control': 'public, max-age=3600' });
     } catch (error) { console.error('History failed', error.message); return unavailable(); }
+  }
+
+  if (path.endsWith('/explain')) {
+    const kind = query.kind === 'history' ? 'history' : 'forecast';
+    const lang = query.lang === 'hi' ? 'hi' : 'en';
+    const days = Number(query.days) === 90 ? 90 : 30;
+    try {
+      const result = await cached('explain', `explain:v1:${kind}:${lang}:${kind === 'history' ? days : 0}:${coords.latitude}:${coords.longitude}`, kind === 'history' ? 6 * 3600 : CACHE_SECONDS, async () => {
+        if (kind === 'history') {
+          const h = await cached('history', `hist:v1:${coords.latitude}:${coords.longitude}:${days}`, 6 * 3600, () => fetchHistory(coords.latitude, coords.longitude, days));
+          return explainSeries({ kind, lang, place: query.place?.slice(0, 60), points: h.rows.map(r => ({ time: r.date, value: r.pm2_5 })),
+            drivers: Object.fromEntries(h.rows.map(r => [r.date, { blhM: r.blhM, windKmh: r.windKmh, rainMm: r.precipitationMm, ventilation: r.ventilation }])) });
+        }
+        const { payload } = await getAir(coords);
+        return explainSeries({ kind, lang, place: query.place?.slice(0, 60), points: payload.forecast.map(p => ({ time: p.time, value: p.pm2_5 })),
+          drivers: Object.fromEntries((payload.weather?.hourly || []).map(w => [w.time, { blhM: w.blhM, windKmh: w.speedKmh, rainMm: w.rainMm, ventilation: w.ventilation }])),
+          fires: payload.fires?.state === 'available' ? { count: payload.fires.count, nearestKm: payload.fires.nearestKm } : null });
+      });
+      metric('ExplainAnswered', 1, 'Count', { Mode: result.mode });
+      return reply(200, result);
+    } catch (error) { console.error('Explain failed', error.message); return unavailable(); }
   }
 
   if (!path.endsWith('/air')) return reply(404, { error: 'not_found' });

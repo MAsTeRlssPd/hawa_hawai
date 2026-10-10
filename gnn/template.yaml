@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Saans Delhi ward AQI forecaster (WardGraphTransformer GNN) — hourly container Lambda writing to the main stack's forecast bucket
+Parameters:
+  ForecastBucket:
+    Type: String
+    Description: ForecastBucketName output of the main saans stack.
+Resources:
+  WardForecastFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: WardForecastLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-ward-forecast'
+      PackageType: Image
+      Architectures: [x86_64]
+      # ~1.4 GB peak RSS locally; memory also buys CPU for the 19-cell fetch + graph forward (~70 s).
+      MemorySize: 3008
+      Timeout: 300
+      Tracing: Active
+      Environment:
+        Variables:
+          FORECAST_BUCKET: !Ref ForecastBucket
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [s3:PutObject]
+              Resource: !Sub 'arn:${AWS::Partition}:s3:::${ForecastBucket}/ward-forecast/*'
+      Events:
+        Hourly:
+          Type: ScheduleV2
+          Properties:
+            # CAMS/Open-Meteo refresh hourly; 20 past the hour lets the new hour land first.
+            ScheduleExpression: cron(20 * * * ? *)
+            RetryPolicy:
+              MaximumRetryAttempts: 0
+    Metadata:
+      DockerContext: .
+      Dockerfile: Dockerfile
+      DockerTag: v1
+  WardForecastLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-ward-forecast'
+      RetentionInDays: 14
+Outputs:
+  WardForecastFunction:
+    Value: !Ref WardForecastFunction

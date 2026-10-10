@@ -56,11 +56,11 @@ export function ventilation(speedKmh, blhM) {
 export async function fetchWeather(latitude, longitude) {
   const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude),
     current: 'temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m',
-    hourly: 'wind_speed_10m,wind_direction_10m,boundary_layer_height,temperature_2m', forecast_hours: '24', wind_speed_unit: 'kmh', timezone: 'auto' });
+    hourly: 'wind_speed_10m,wind_direction_10m,boundary_layer_height,temperature_2m,precipitation', forecast_hours: '48', wind_speed_unit: 'kmh', timezone: 'auto' });
   const data = await jsonFetch(`https://api.open-meteo.com/v1/forecast?${params}`, {}, 'open_meteo_weather');
   const current = data.current || {}, h = data.hourly || {};
   const hourly = (h.time || []).map((time, i) => ({ time, speedKmh: Math.round(h.wind_speed_10m[i]), fromDeg: h.wind_direction_10m[i],
-    blhM: h.boundary_layer_height?.[i] ?? null, temperatureC: h.temperature_2m?.[i] ?? null }));
+    blhM: h.boundary_layer_height?.[i] ?? null, temperatureC: h.temperature_2m?.[i] ?? null, rainMm: h.precipitation?.[i] ?? null }));
   const speedKmh = Math.round(current.wind_speed_10m);
   const blhM = hourly[0]?.blhM ?? null; // hourly starts at the current hour; BLH is not offered as a "current" variable
   return { speedKmh, gustKmh: Math.round(current.wind_gusts_10m), fromDeg: current.wind_direction_10m, fromCompass: compass(current.wind_direction_10m),

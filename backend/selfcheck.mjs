@@ -1,8 +1,8 @@
 // Run: node backend/selfcheck.mjs  (fails loudly if band, outlier or estimate logic breaks)
 import assert from 'node:assert/strict';
-import { bandFor, actionsFor, compass, pollutantsFor, PROFILES } from './src/guidance.mjs';
+import { bandFor, actionsFor, compass, pollutantsFor, PROFILES, CONDITIONS, subIndex, aqiBandFor, aqiSeries } from './src/guidance.mjs';
 import { flagOutliers, makeEstimate } from './src/handler.mjs';
-import { ruleAnswer } from './src/assistant.mjs';
+import { ruleAnswer, chatTurns, findAnomalies, anomalyNote } from './src/assistant.mjs';
 import { ventilation, parseFiresCsv, recentFires,stateOf, summariseFires, upwindFires, bearing, backtest, pearson, historyCsv, parseGeocode } from './src/sources.mjs';
 
 assert.deepEqual([0, 30, 30.1, 60, 90, 120, 250, 251].map(pm => bandFor(pm).key), ['good', 'good', 'satisfactory', 'satisfactory', 'moderate', 'poor', 'very_poor', 'severe']);
@@ -13,6 +13,31 @@ assert.equal(actionsFor(4, 'commuter').en.filter(t => t.includes('N95')).length,
 const pol = pollutantsFor({ pm10: 120, carbon_monoxide: 2500, ozone: null });
 assert.deepEqual(pol.map(p => [p.key, p.value, p.level.key]), [['pm10', 120, 'moderate'], ['carbon_monoxide', 2.5, 'moderate']]);
 assert.equal(compass(315), 'NW');
+// Health conditions stack on the persona, en/hi in step
+for (const c of CONDITIONS) for (let i = 0; i < 6; i++) { const a = actionsFor(i, 'general', [c]); assert.equal(a.en.length, a.hi.length, `${c} ${i}`); }
+assert.equal(actionsFor(3, 'general', ['asthma']).en.length, actionsFor(3, 'general').en.length + 2);
+
+// CPCB AQI (port of build_gnn_dataset.cpcb_aqi): sub-index interpolation, bands, rolling series with bias factors
+assert.equal(subIndex('pm2_5', 45), 75);
+assert.equal(subIndex('pm2_5', 600), 500);
+assert.equal(subIndex('carbon_monoxide', 1.5), 75);
+assert.deepEqual([50, 51, 150, 250, 350, 401].map(a => aqiBandFor(a).key), ['good', 'satisfactory', 'moderate', 'poor', 'very_poor', 'severe']);
+const hours = Array.from({ length: 30 }, (_, i) => `2026-10-${String(9 + (i >> 4)).padStart(2, '0')}T${String(i % 24).padStart(2, '0')}:00`);
+const flat = v => hours.map(() => v);
+const series = aqiSeries({ time: hours, pm2_5: flat(100), pm10: flat(100), nitrogen_dioxide: flat(40), ozone: flat(30), carbon_monoxide: flat(800), sulphur_dioxide: flat(10) });
+assert.equal(series[0].aqi, null); // not enough hours for a 24 h mean
+assert.deepEqual([series.at(-1).aqi, series.at(-1).dominant], [267, 'pm2_5']); // 100 × 1.10 (October) = 110 µg/m³
+assert.equal(aqiSeries({ time: hours, pm2_5: flat(100), pm10: flat(10), nitrogen_dioxide: flat(10) }, 1).at(-1).aqi, 233);
+
+// Chat history: alternating turns starting with the user, latest question last
+assert.deepEqual(chatTurns([{ role: 'assistant', text: 'hi' }, { role: 'user', text: 'a' }, { role: 'assistant', text: 'b' }, { role: 'user', text: 'c' }], 'q').map(t => [t.role, t.content[0].text]),
+  [['user', 'a'], ['assistant', 'b'], ['user', 'q']]);
+// Anomalies: one spike in a flat series, explained by a shallow mixing layer
+const pts = Array.from({ length: 24 }, (_, i) => ({ time: `2026-10-10T${String(i).padStart(2, '0')}:00`, value: i === 10 ? 150 : 50 + (i % 3) }));
+const an = findAnomalies(pts);
+assert.deepEqual(an.map(a => [a.time, a.kind]), [['2026-10-10T10:00', 'spike']]);
+assert.match(anomalyNote(an[0], { blhM: 200, windKmh: 4 }, { blhM: 800, windKmh: 10 }, null, 'en'), /shallow mixing layer.*light winds/);
+assert.deepEqual(findAnomalies(pts.map(p => ({ ...p, value: 50 }))), []);
 
 const s = (pm2_5, distanceKm = 2, status = 'reporting') => ({ pm2_5, distanceKm, status });
 const flagged = flagOutliers([s(40), s(45), s(295)], 50);
