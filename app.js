@@ -1127,7 +1127,7 @@ locationSearch.addEventListener('input', () => {
   searchTimer = setTimeout(async () => {
     const token = ++searchToken;
     try {
-      const result = await fetch(`${API_BASE}/v1/geocode?q=${encodeURIComponent(q)}`);
+      const result = await fetch(`${API_BASE}/v1/geocode?q=${encodeURIComponent(q)}&near=${selectedLocation.latitude},${selectedLocation.longitude}`);
       const data = await result.json();
       if (token === searchToken) showPlaces(result.ok ? data.results : [], ui().results);
     } catch { if (token === searchToken) showPlaces([], ui().results); }

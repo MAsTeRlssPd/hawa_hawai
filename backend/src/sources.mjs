@@ -205,3 +205,30 @@ export async function geocode(query) {
   const params = new URLSearchParams({ name: query, count: '8', countryCode: 'IN', language: 'en', format: 'json' });
   return parseGeocode(await jsonFetch(`https://geocoding-api.open-meteo.com/v1/search?${params}`, {}, 'open_meteo_geocoding'));
 }
+
+// --- Amazon Location Service places: colleges, sectors, landmarks and streets, not just towns -----------------
+export function parsePlaces(items) {
+  return (items || []).filter(r => r.Position?.length === 2).map(r => {
+    const a = r.Address || {};
+    return { name: r.Title, district: a.District || a.Locality || null, state: a.Region?.Name || null, latitude: r.Position[1], longitude: r.Position[0],
+      label: (a.Label || '').replace(/, India$/, '') };
+  });
+}
+
+let placesClient;
+// near: { latitude, longitude } to rank results around the user. Results are not cached (Amazon Location single-use terms).
+export async function searchPlaces(query, near) {
+  const { GeoPlacesClient, SearchTextCommand } = await import('@aws-sdk/client-geo-places');
+  placesClient ||= new GeoPlacesClient({});
+  const started = Date.now();
+  try {
+    const out = await placesClient.send(new SearchTextCommand({ QueryText: query, MaxResults: 8, Language: 'en', Filter: { IncludeCountries: ['IND'] },
+      BiasPosition: [near?.longitude ?? 77.209, near?.latitude ?? 28.6139] }), { abortSignal: AbortSignal.timeout(5000) });
+    return parsePlaces(out.ResultItems);
+  } catch (error) {
+    metric('ProviderError', 1, 'Count', { Provider: 'amazon_location' });
+    throw error;
+  } finally {
+    metric('ProviderLatency', Date.now() - started, 'Milliseconds', { Provider: 'amazon_location' });
+  }
+}

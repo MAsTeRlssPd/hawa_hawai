@@ -1,4 +1,4 @@
-// Trip planner: compare driving routes by haze (CAMS PM2.5 + model visibility) and pick the cleanest time to leave.
+// Trip planner: compare driving routes by haze (live monitors along the road + CAMS PM2.5 forecast + model visibility) and pick the cleanest time to leave.
 // Loaded before app.js; uses its globals (API_BASE, selectedLocation, baseMap, maps, refreshMaps, bandOf, chartTip, formatTime, safeText, langKey) at render time.
 
 const TRIP_UI = {
@@ -6,12 +6,20 @@ const TRIP_UI = {
     pick: 'Pick where you are going. Saans checks the haze, smog and visibility along each driving route and the best time to leave.',
     route: id => `Route ${id}`, best: 'Least smoke breathed', now: 'If you leave now', avg: 'Avg PM2.5', max: 'Worst stretch', vis: 'Lowest visibility', hazy: 'Hazy stretch', fires: n => `${n} fire${n === 1 ? '' : 's'} within 10 km`,
     leave: 'When to leave', leaveBody: (route, time, pm, now) => `On route ${route}, leaving at ${time} means ~${pm} µg/m³ on average instead of ${now} now.`, leaveSame: route => `On route ${route}, haze stays about the same through the day: leave when it suits you.`,
-    chartLabel: 'Average PM2.5 on the trip by departure hour', noRoute: 'No driving route found between these places.', km: 'km', min: 'min', h: 'h' },
+    chartLabel: 'Average PM2.5 on the trip by departure hour', noRoute: 'No driving route found between these places.', km: 'km', min: 'min', h: 'h',
+    monitors: (n, pct) => `📍 ${n} live monitor${n === 1 ? '' : 's'} · ${pct}% of the road`, modelOnly: 'Model only: no live monitor within 6 km',
+    same: (id, spread) => `All routes breathe about the same air (within ${spread} µg/m³), so ★ goes to route ${id}: the quickest, so the least time spent in it.`,
+    diff: (id, worst, gap) => `★ Route ${id} breathes the least smoke: about ${gap} µg/m³ cleaner on average than route ${worst}, counting time on the road.`,
+    live: 'live', monitor: 'monitor' },
   hi: { from: 'कहाँ से', to: 'कहाँ तक', go: 'रास्तों की तुलना करें', here: 'मेरी जगह', search: 'जगह खोजें…', loading: 'हर रास्ते पर धुंध जाँच रहे हैं…', fail: 'अभी यह यात्रा नहीं बन पाई। फिर कोशिश करें।',
     pick: 'बताएँ कि आप कहाँ जा रहे हैं। Saans हर रास्ते पर धुंध, स्मॉग और दृश्यता, और निकलने का सबसे अच्छा समय जाँचता है।',
     route: id => `रास्ता ${id}`, best: 'सबसे कम धुआँ', now: 'अभी निकलें तो', avg: 'औसत PM2.5', max: 'सबसे ख़राब हिस्सा', vis: 'सबसे कम दृश्यता', hazy: 'धुंध वाला हिस्सा', fires: n => `10 km के भीतर ${n} आग`,
     leave: 'कब निकलें', leaveBody: (route, time, pm, now) => `रास्ता ${route} पर ${time} बजे निकलने से औसत ~${pm} µg/m³ रहेगा, अभी ${now} की जगह।`, leaveSame: route => `रास्ता ${route} पर दिन भर धुंध लगभग एक जैसी रहेगी: जब सुविधा हो तब निकलें।`,
-    chartLabel: 'निकलने के समय के अनुसार यात्रा का औसत PM2.5', noRoute: 'इन जगहों के बीच सड़क का रास्ता नहीं मिला।', km: 'km', min: 'मिनट', h: 'घंटे' }
+    chartLabel: 'निकलने के समय के अनुसार यात्रा का औसत PM2.5', noRoute: 'इन जगहों के बीच सड़क का रास्ता नहीं मिला।', km: 'km', min: 'मिनट', h: 'घंटे',
+    monitors: (n, pct) => `📍 ${n} लाइव मॉनिटर · रास्ते का ${pct}%`, modelOnly: 'सिर्फ़ मॉडल: 6 km के भीतर कोई लाइव मॉनिटर नहीं',
+    same: (id, spread) => `सभी रास्तों पर हवा लगभग एक जैसी है (${spread} µg/m³ के भीतर), इसलिए ★ रास्ता ${id} को: सबसे जल्दी, यानी धुएँ में सबसे कम समय।`,
+    diff: (id, worst, gap) => `★ रास्ता ${id} पर सबसे कम धुआँ: रास्ता ${worst} से औसतन ~${gap} µg/m³ साफ़, सड़क पर बिताया समय जोड़कर।`,
+    live: 'लाइव', monitor: 'मॉनिटर' }
 };
 const ROUTE_COLORS = { A: '#4e8676', B: '#c8794b', C: '#6b7fb0' };
 const trip = { from: null, to: null, data: null, active: null, loading: false, error: '' };
@@ -45,12 +53,15 @@ function renderTrip() {
   else if (!d) cards.innerHTML = `<p class="muted">${t.pick}</p>`;
   else {
     const lang = langKey();
-    cards.innerHTML = d.routes.map(r => {
+    const worst = d.routes.reduce((a, b) => b.now.avgPm > a.now.avgPm ? b : a), pick = d.routes.find(r => r.id === d.recommended);
+    const why = d.sameAir || pick.now.avgPm >= worst.now.avgPm ? t.same(d.recommended, Math.max(1, Math.round(d.spreadPm ?? 0))) : t.diff(d.recommended, worst.id, worst.now.avgPm - pick.now.avgPm);
+    cards.innerHTML = `<p class="trip-why">${safeText(why)}</p>` + d.routes.map(r => {
       const band = bandOf(r.now.avgPm);
       return `<button type="button" class="route-card${r.id === trip.active ? ' on' : ''}" data-route="${r.id}" style="--c:${ROUTE_COLORS[r.id]};--band:${band[1]}">
         <span class="route-top"><b>${t.route(r.id)}</b>${r.id === d.recommended ? `<span class="route-best">★ ${t.best}</span>` : ''}<small>${r.distanceKm} ${t.km} · ${tripDuration(r.durationMin, t)}</small></span>
         <span class="route-pm"><b>${r.now.avgPm}</b><small>${t.avg} · ${band[lang === 'hi' ? 3 : 2]}</small></span>
-        <span class="route-facts"><span>${t.max}: <b>${r.now.maxPm}</b> µg/m³</span>${r.now.minVisKm != null ? `<span>${t.vis}: <b>${r.now.minVisKm} km</b></span>` : ''}<span>${t.hazy}: <b>${r.now.hazyKm} ${t.km}</b></span>${r.fires ? `<span class="route-fire">🔥 ${t.fires(r.fires)}</span>` : ''}</span></button>`;
+        <span class="route-facts"><span>${t.max}: <b>${r.now.maxPm}</b> µg/m³</span>${r.now.minVisKm != null ? `<span>${t.vis}: <b>${r.now.minVisKm} km</b></span>` : ''}<span>${t.hazy}: <b>${r.now.hazyKm} ${t.km}</b></span>${r.fires ? `<span class="route-fire">🔥 ${t.fires(r.fires)}</span>` : ''}
+        <span class="route-basis">${r.monitors?.length ? t.monitors(r.monitors.length, Math.round(r.measuredShare * 100)) : t.modelOnly}</span></span></button>`;
     }).join('');
   }
   below.innerHTML = d && !trip.loading ? departureHtml(d, t) : '';
@@ -62,15 +73,17 @@ function renderTrip() {
   drawTripMap();
 }
 
-let tripSearchTimer;
+let tripSearchTimer, tripSearchToken = 0;
 function tripSearch(input) {
   clearTimeout(tripSearchTimer);
   const box = input.parentElement.querySelector('.trip-results'), q = input.value.trim();
   if (q.length < 2 || !API_BASE) { box.hidden = true; return; }
   tripSearchTimer = setTimeout(async () => {
+    const token = ++tripSearchToken;
     try {
-      const result = await fetch(`${API_BASE}/v1/geocode?q=${encodeURIComponent(q)}`);
+      const result = await fetch(`${API_BASE}/v1/geocode?q=${encodeURIComponent(q)}&near=${selectedLocation.latitude},${selectedLocation.longitude}`);
       const places = result.ok ? (await result.json()).results : [];
+      if (token !== tripSearchToken) return;
       box.places = places;
       box.innerHTML = places.map((p, i) => `<button type="button" class="trip-option" data-i="${i}"><b>${safeText(p.name)}</b><small>${safeText(p.label || '')}</small></button>`).join('');
       box.hidden = !places.length;
@@ -125,7 +138,9 @@ function drawTripMap() {
       L.polyline(r.geometry, { color: on ? ROUTE_COLORS[r.id] : '#8a948f', weight: on ? 6 : 4, opacity: on ? .95 : .55 })
         .on('click', () => { trip.active = r.id; renderTrip(); }).addTo(m.layer);
       if (on) r.samples.forEach(s => Number.isFinite(s.pm2_5) && L.circleMarker([s.lat, s.lon], { radius: 7, color: '#fff', weight: 2, fillColor: bandOf(s.pm2_5)[1], fillOpacity: 1 })
-        .bindTooltip(`${s.km} km · PM2.5 ${Math.round(s.pm2_5)} µg/m³`).addTo(m.layer));
+        .bindTooltip(`${s.km} km · PM2.5 ${Math.round(s.pm2_5)} µg/m³${s.monitor ? ` · ${safeText(s.monitor)}` : ''}`).addTo(m.layer));
+      if (on) (r.monitors || []).forEach(st => L.marker([st.latitude, st.longitude], { icon: L.divIcon({ className: '', iconSize: null, html: `<span class="trip-monitor" style="--band:${bandOf(st.pm2_5)[1]}">${st.pm2_5}</span>` }) })
+        .bindTooltip(`${safeText(st.name)} · PM2.5 ${st.pm2_5} µg/m³ (${TRIP_UI[langKey()].live} ${TRIP_UI[langKey()].monitor})`).addTo(m.layer));
     });
   }
   if (trip.from) pin(trip.from, '●');

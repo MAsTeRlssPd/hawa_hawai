@@ -142,6 +142,10 @@ Resources:
             - Effect: Allow
               Action: [sns:Subscribe, sns:Publish]
               Resource: !Ref AlertsTopic
+            # Amazon Location Service place search (colleges, sectors, landmarks) for the location pickers
+            - Effect: Allow
+              Action: [geo-places:SearchText]
+              Resource: !Sub 'arn:${AWS::Partition}:geo-places:${AWS::Region}::provider/default'
             - Effect: Allow
               Action: [ssm:GetParameter]
               Resource:

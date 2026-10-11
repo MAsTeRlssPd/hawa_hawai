@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { bandFor, actionsFor, compass, pollutantsFor, PROFILES, CONDITIONS, subIndex, aqiBandFor, aqiSeries } from './src/guidance.mjs';
 import { flagOutliers, makeEstimate } from './src/handler.mjs';
 import { ruleAnswer, chatTurns, findAnomalies, anomalyNote, cleanAbout } from './src/assistant.mjs';
-import { samplePath, scoreTrip, firesNear } from './src/routes.mjs';
+import { samplePath, scoreTrip, firesNear, blendStations } from './src/routes.mjs';
 import { validEmail, subscriberId, shouldSend, alertMessage, alertOne, advisoryText, advisoriesNear, sendAdvisory } from './src/alerts.mjs';
-import { ventilation, parseFiresCsv, recentFires,stateOf, summariseFires, upwindFires, bearing, backtest, pearson, historyCsv, parseGeocode } from './src/sources.mjs';
+import { ventilation, parseFiresCsv, recentFires,stateOf, summariseFires, upwindFires, bearing, backtest, pearson, historyCsv, parseGeocode, parsePlaces } from './src/sources.mjs';
 
 assert.deepEqual([0, 30, 30.1, 60, 90, 120, 250, 251].map(pm => bandFor(pm).key), ['good', 'good', 'satisfactory', 'satisfactory', 'moderate', 'poor', 'very_poor', 'severe']);
 assert.ok(actionsFor(3, 'children').en.length > actionsFor(3, 'general').en.length);
@@ -108,6 +108,14 @@ const trip = [{ minute: 0, pm: [100, 40], vis: [1500, 9000] }, { minute: 70, pm:
 assert.deepEqual(scoreTrip(trip, 0, 10), { avgPm: 90, maxPm: 100, minVisKm: 1.5, hazyKm: 10 }); // second point is reached an hour later
 assert.deepEqual(scoreTrip(trip, 1, 10), { avgPm: 30, maxPm: 40, minVisKm: 9, hazyKm: 0 });
 assert.equal(firesNear(line, [[28.5, 77.05, 5], [28.5, 77.5, 5], [20, 70, 5]]), 1);
+// Monitors: a sample next to a 150 reading doubles a 75 model series; one 20 km away is left on the model
+const st = [{ id: 'x', name: 'Rohini', latitude: 28.73, longitude: 77.12, pm2_5: 150 }];
+const blended = blendStations([{ lat: 28.731, lon: 77.12, pm: [75, 50] }, { lat: 28.55, lon: 77.12, pm: [75, 50] }], st);
+assert.deepEqual(blended[0].pm, [150, 100]);
+assert.equal(blended[0].monitors[0].name, 'Rohini');
+assert.deepEqual([blended[1].pm, blended[1].monitors], [[75, 50], []]);
+assert.deepEqual(parsePlaces([{ Title: 'Delhi Technological University (Dtu)', Position: [77.11765, 28.74451], Address: { Label: 'Bawana Main Road, Rohini, Delhi 110042, India', District: 'Rohini', Region: { Name: 'Delhi' } } }]),
+  [{ name: 'Delhi Technological University (Dtu)', district: 'Rohini', state: 'Delhi', latitude: 28.74451, longitude: 77.11765, label: 'Bawana Main Road, Rohini, Delhi 110042' }]);
 
 // Alerts: email check, stable id, quiet hours, "changes" only on a band move, ASCII subject
 assert.ok(validEmail('a.b@example.in') && !validEmail('nope@x') && !validEmail('a b@c.de'));

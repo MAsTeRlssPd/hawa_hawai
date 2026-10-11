@@ -7,9 +7,9 @@ import { readFile } from 'node:fs/promises';
 import { Tracer } from '@aws-lambda-powertools/tracer';
 import { guidanceFor, PROFILES, CONDITIONS, POLLUTANT_KEYS, pollutantsFor, aqiSeries, aqiBandFor, CONFORMAL_DELTA, POLLUTANT_NAMES } from './guidance.mjs';
 import { answer, explainSeries, cleanAbout, llmConfigured, keys } from './assistant.mjs';
-import { planTrip, MAX_TRIP_KM } from './routes.mjs';
+import { planTrip, MAX_TRIP_KM, STATION_KM } from './routes.mjs';
 import { subscribe, listSubscribers, alertOne, sendAdvisory, readAdvisories, advisoriesNear, countSubscribersNear, advisoryText, ADVISORY_KM } from './alerts.mjs';
-import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFires, upwindFires, INDIA_BBOX, fetchHistory, historyCsv, geocode } from './sources.mjs';
+import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFires, upwindFires, INDIA_BBOX, fetchHistory, historyCsv, geocode, searchPlaces } from './sources.mjs';
 
 // X-Ray: AWS SDK calls and outbound fetch() show up as subsegments; disabled automatically outside Lambda.
 const tracer = new Tracer({ serviceName: 'saans-api' });
@@ -23,6 +23,8 @@ const CACHE_SECONDS = 300;
 const CACHE_VERSION = 'v5';
 const MAX_STATIONS = 8;
 const CANDIDATE_LOCATIONS = 12;
+const TRIP_STATION_KM = 60; // straight-line trip length up to which monitors along the way are used
+const TRIP_STATIONS = 15;
 const MAX_STATION_AGE_MINUTES = 7 * 24 * 60; // older monitors are treated as offline and hidden
 const FIRE_DAYS = [1, 3, 7];
 const secrets = {};
@@ -48,38 +50,59 @@ const getOpenAqKey = () => getSecret('OPENAQ_API_KEY', process.env.OPENAQ_PARAME
 const getFirmsKey = () => getSecret('FIRMS_MAP_KEY', process.env.FIRMS_PARAMETER_NAME);
 keys.gemini = () => getSecret('GEMINI_API_KEY', process.env.GEMINI_PARAMETER_NAME);
 
+// OpenAQ locations with a PM2.5 sensor, nearest to origin first.
+const pmLocations = (list, origin) => (list.results || []).map(location => {
+  const coords = location.coordinates || {};
+  const sensors = (location.sensors || []).filter(sensor => String(sensor.parameter?.name || '').toLowerCase().replaceAll('₂', '2').replaceAll('.', '') === 'pm25' || sensor.parameter?.id === 2);
+  return { location, coords, sensors, distanceKm: origin ? haversineKm(origin, coords) : 0 };
+}).filter(x => Number.isFinite(x.coords.latitude) && Number.isFinite(x.coords.longitude) && x.sensors.length).sort((a, b) => a.distanceKm - b.distanceKm);
+
+async function readStation({ location, coords, sensors, distanceKm }, key) {
+  try {
+    const latest = await jsonFetch(`https://api.openaq.org/v3/locations/${location.id}/latest?limit=100&page=1`, { headers: { 'X-API-Key': key } }, 'openaq');
+    const sensorIds = new Set(sensors.map(sensor => sensor.id));
+    const reading = (latest.results || []).filter(item => sensorIds.has(item.sensorsId) && Number.isFinite(item.value))
+      .sort((a, b) => Date.parse(b.datetime?.utc || 0) - Date.parse(a.datetime?.utc || 0))[0];
+    if (!reading) return null;
+    const measuredAt = reading.datetime?.utc;
+    const ageMinutes = measuredAt ? Math.max(0, (Date.now() - Date.parse(measuredAt)) / 60000) : null;
+    if (ageMinutes == null || ageMinutes > MAX_STATION_AGE_MINUTES) return null;
+    return { id: String(location.id), name: location.name || 'Unnamed monitoring location', latitude: coords.latitude, longitude: coords.longitude,
+      distanceKm: Math.round(distanceKm * 10) / 10, pm2_5: reading.value, unit: sensors[0]?.parameter?.units || 'µg/m³',
+      measuredAt, ageMinutes: Math.round(ageMinutes), status: ageMinutes <= 180 ? 'reporting' : 'stale', source: 'OpenAQ' };
+  } catch (error) { console.warn('Station read failed', location.id, error.message); return null; }
+}
+
 async function fetchStations(latitude, longitude) {
   const key = await getOpenAqKey();
   if (!key) return { state: 'not_configured', stations: [] };
   try {
     const params = new URLSearchParams({ coordinates: `${latitude},${longitude}`, radius: '25000', parameters_id: '2', limit: '100', page: '1' });
     const list = await jsonFetch(`https://api.openaq.org/v3/locations?${params}`, { headers: { 'X-API-Key': key } }, 'openaq');
-    const locations = (list.results || []).map(location => {
-      const coords = location.coordinates || {};
-      const sensors = (location.sensors || []).filter(sensor => String(sensor.parameter?.name || '').toLowerCase().replaceAll('₂', '2').replaceAll('.', '') === 'pm25' || sensor.parameter?.id === 2);
-      return { location, coords, sensors, distanceKm: haversineKm({ latitude, longitude }, coords) };
-    }).filter(x => Number.isFinite(x.coords.latitude) && Number.isFinite(x.coords.longitude) && x.sensors.length)
-      .sort((a, b) => a.distanceKm - b.distanceKm).slice(0, CANDIDATE_LOCATIONS);
-    const stations = await Promise.all(locations.map(async ({ location, coords, sensors, distanceKm }) => {
-      try {
-        const latest = await jsonFetch(`https://api.openaq.org/v3/locations/${location.id}/latest?limit=100&page=1`, { headers: { 'X-API-Key': key } }, 'openaq');
-        const sensorIds = new Set(sensors.map(sensor => sensor.id));
-        const reading = (latest.results || []).filter(item => sensorIds.has(item.sensorsId) && Number.isFinite(item.value))
-          .sort((a, b) => Date.parse(b.datetime?.utc || 0) - Date.parse(a.datetime?.utc || 0))[0];
-        if (!reading) return null;
-        const measuredAt = reading.datetime?.utc;
-        const ageMinutes = measuredAt ? Math.max(0, (Date.now() - Date.parse(measuredAt)) / 60000) : null;
-        if (ageMinutes == null || ageMinutes > MAX_STATION_AGE_MINUTES) return null;
-        return { id: String(location.id), name: location.name || 'Unnamed monitoring location', latitude: coords.latitude, longitude: coords.longitude,
-          distanceKm: Math.round(distanceKm * 10) / 10, pm2_5: reading.value, unit: sensors[0]?.parameter?.units || 'µg/m³',
-          measuredAt, ageMinutes: Math.round(ageMinutes), status: ageMinutes <= 180 ? 'reporting' : 'stale', source: 'OpenAQ' };
-      } catch (error) { console.warn('Station read failed', location.id, error.message); return null; }
-    }));
+    const stations = await Promise.all(pmLocations(list, { latitude, longitude }).slice(0, CANDIDATE_LOCATIONS).map(entry => readStation(entry, key)));
     return { state: 'available', stations: stations.filter(Boolean).slice(0, MAX_STATIONS) };
   } catch (error) {
     console.warn('OpenAQ unavailable', error.message);
     return { state: 'temporarily_unavailable', stations: [] };
   }
+}
+
+// Trip planner: live monitors within STATION_KM of any sampled road point. One bbox listing (cached 1 h) picks monitors
+// that reported in the last 3 h; at most TRIP_STATIONS readings, each cached 15 min, keep OpenAQ under its 60/min limit.
+async function stationsAlong(points) {
+  const key = await getOpenAqKey();
+  if (!key || !points.length) return [];
+  const pad = .06, r = v => Math.round(v * 20) / 20;
+  const lats = points.map(p => p.lat), lons = points.map(p => p.lon);
+  const bbox = [r(Math.min(...lons) - pad), r(Math.min(...lats) - pad), r(Math.max(...lons) + pad), r(Math.max(...lats) + pad)].join(',');
+  const list = await cached('route-monitors', `oaq-bbox:v1:${bbox}`, 3600, () =>
+    jsonFetch(`https://api.openaq.org/v3/locations?bbox=${bbox}&parameters_id=2&limit=1000`, { headers: { 'X-API-Key': key } }, 'openaq'), true);
+  const fresh = Date.now() - 3 * 3600e3;
+  const near = pmLocations(list).filter(x => Date.parse(x.location.datetimeLast?.utc || 0) >= fresh)
+    .map(x => ({ ...x, gap: Math.min(...points.map(p => haversineKm({ latitude: p.lat, longitude: p.lon }, x.coords))) }))
+    .filter(x => x.gap <= STATION_KM).sort((a, b) => a.gap - b.gap).slice(0, TRIP_STATIONS);
+  const read = await Promise.all(near.map(x => cached('route-monitors', `oaq-latest:v1:${x.location.id}`, 900, () => readStation(x, key), true)));
+  return read.filter(st => st?.status === 'reporting');
 }
 
 async function fetchForecast(latitude, longitude) {
@@ -320,9 +343,11 @@ async function route(event) {
     const km = haversineKm(from, to);
     if (km < 0.5 || km > MAX_TRIP_KM) return reply(400, { error: 'invalid_distance', message: `Trips must be between 0.5 and ${MAX_TRIP_KM} km apart.` });
     try {
-      const trip = await cached('route', `route:v1:${from.latitude}:${from.longitude}:${to.latitude}:${to.longitude}`, 1800, async () => {
+      const trip = await cached('route', `route:v2:${from.latitude}:${from.longitude}:${to.latitude}:${to.longitude}`, 1800, async () => {
         const fires = await Promise.race([getFires(1), new Promise(resolve => setTimeout(resolve, 4000, null).unref())]).catch(() => null);
-        return planTrip(from, to, fires?.state === 'available' ? fires.points : null);
+        // City trips: live monitors along the roads score each stretch; long trips stay on the model.
+        const monitors = km <= TRIP_STATION_KM ? points => stationsAlong(points).catch(error => { console.warn('Route monitors unavailable', error.message); return []; }) : null;
+        return planTrip(from, to, fires?.state === 'available' ? fires.points : null, monitors);
       }, true);
       return reply(200, trip, { 'cache-control': 'public, max-age=900' });
     } catch (error) {
@@ -336,6 +361,11 @@ async function route(event) {
   if (path.endsWith('/geocode')) {
     const q = String(query.q || '').trim();
     if (q.length < 2 || q.length > 60) return reply(400, { error: 'invalid_query', message: 'Provide q with 2 to 60 characters.' });
+    const [nearLat, nearLon] = String(query.near || '').split(',');
+    try {
+      const results = await searchPlaces(q, parseCoords(nearLat, nearLon));
+      if (results.length) return reply(200, { query: q, results, source: 'amazon_location' });
+    } catch (error) { console.warn('Amazon Location search failed', error.name, error.message); }
     try {
       const results = await cached('geocode', `geo:v1:${q.toLowerCase()}`, 86400, () => geocode(q), true);
       return reply(200, { query: q, results, source: 'open_meteo_geocoding' }, { 'cache-control': 'public, max-age=86400' });
