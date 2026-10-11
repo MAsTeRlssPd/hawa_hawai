@@ -4,7 +4,7 @@ import { bandFor, actionsFor, compass, pollutantsFor, PROFILES, CONDITIONS, subI
 import { flagOutliers, makeEstimate } from './src/handler.mjs';
 import { ruleAnswer, chatTurns, findAnomalies, anomalyNote, cleanAbout } from './src/assistant.mjs';
 import { samplePath, scoreTrip, firesNear } from './src/routes.mjs';
-import { validEmail, subscriberId, shouldSend, alertMessage, alertOne } from './src/alerts.mjs';
+import { validEmail, subscriberId, shouldSend, alertMessage, alertOne, advisoryText, advisoriesNear, sendAdvisory } from './src/alerts.mjs';
 import { ventilation, parseFiresCsv, recentFires,stateOf, summariseFires, upwindFires, bearing, backtest, pearson, historyCsv, parseGeocode } from './src/sources.mjs';
 
 assert.deepEqual([0, 30, 30.1, 60, 90, 120, 250, 251].map(pm => bandFor(pm).key), ['good', 'good', 'satisfactory', 'satisfactory', 'moderate', 'poor', 'very_poor', 'severe']);
@@ -138,4 +138,21 @@ assert.equal(await alertOne(stubEnv(subItem, { Attributes: { PendingConfirmation
 assert.equal(await alertOne(stubEnv(subItem, { Attributes: {} }), 'a@b.com', night), 'skipped');
 assert.equal(await alertOne(stubEnv(subItem, { Attributes: {} }, true), 'a@b.com', noon), 'sent'); // recorded-or-not, no throw after Publish
 assert.ok(sent.includes('PublishCommand'));
+
+// Advisory: bilingual text from live data, area filter, expiry, and the one-per-5-min limit
+const adv = advisoryText(alertAir, 'Lajpat Nagar');
+assert.match(adv.en.text, /^Air quality advisory for Lajpat Nagar[\s\S]*AQI 212 \(Poor\)[\s\S]*Everyone:\n- /);
+assert.match(adv.hi.text, /परामर्श[\s\S]*सभी के लिए/);
+const t0 = Date.parse('2026-10-11T07:00:00Z');
+const list = [{ latitude: 28.57, longitude: 77.24, radiusKm: 5, expiresAt: t0 + 1 }, { latitude: 28.57, longitude: 77.24, radiusKm: 5, expiresAt: t0 - 1 }, { latitude: 19.07, longitude: 72.87, radiusKm: 5, expiresAt: t0 + 1 }];
+assert.equal(advisoriesNear(list, { latitude: 28.6, longitude: 77.25 }, t0).length, 1);
+const published = [];
+const advEnv = { topic: 't', getAir: async () => ({ payload: alertAir }),
+  ddb: { send: async c => c.constructor.name === 'ScanCommand' ? { Items: [{ id: 'near', latitude: 28.58, longitude: 77.25, lang: 'hi' }, { id: 'far', latitude: 19.07, longitude: 72.87 }] } : {} },
+  sns: { send: async c => { published.push(c.input); return {}; } } };
+const first = await sendAdvisory(advEnv, { latitude: 28.57, longitude: 77.24 }, 'Lajpat Nagar', t0);
+assert.equal(first.status, 200); assert.equal(first.body.recipients, 1);
+assert.match(published[0].Message, /^Lajpat Nagar के लिए/); // subscriber's language first
+assert.equal((await sendAdvisory(advEnv, { latitude: 28.57, longitude: 77.24 }, 'Lajpat Nagar', t0 + 60e3)).status, 429);
+assert.equal((await sendAdvisory(advEnv, { latitude: 28.57, longitude: 77.24 }, 'Lajpat Nagar', t0 + 301e3)).status, 200);
 console.log('selfcheck ok');

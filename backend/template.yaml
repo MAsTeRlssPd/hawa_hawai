@@ -140,7 +140,7 @@ Resources:
             TableName: !Ref AlertSubscribers
         - Statement:
             - Effect: Allow
-              Action: [sns:Subscribe]
+              Action: [sns:Subscribe, sns:Publish]
               Resource: !Ref AlertsTopic
             - Effect: Allow
               Action: [ssm:GetParameter]
@@ -220,6 +220,18 @@ Resources:
           Properties:
             ApiId: !Ref AirApi
             Path: /v1/alerts
+            Method: POST
+        AdvisoryGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/advisory
+            Method: GET
+        AdvisoryPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/advisory
             Method: POST
   # Runs one step of the alerts state machine below: list subscribers, or alert one subscriber.
   AlertsFunction:

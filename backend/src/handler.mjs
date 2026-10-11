@@ -8,7 +8,7 @@ import { Tracer } from '@aws-lambda-powertools/tracer';
 import { guidanceFor, PROFILES, CONDITIONS, POLLUTANT_KEYS, pollutantsFor, aqiSeries, aqiBandFor, CONFORMAL_DELTA, POLLUTANT_NAMES } from './guidance.mjs';
 import { answer, explainSeries, cleanAbout, llmConfigured, keys } from './assistant.mjs';
 import { planTrip, MAX_TRIP_KM } from './routes.mjs';
-import { subscribe, listSubscribers, alertOne } from './alerts.mjs';
+import { subscribe, listSubscribers, alertOne, sendAdvisory, readAdvisories, advisoriesNear, countSubscribersNear, advisoryText, ADVISORY_KM } from './alerts.mjs';
 import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFires, upwindFires, INDIA_BBOX, fetchHistory, historyCsv, geocode } from './sources.mjs';
 
 // X-Ray: AWS SDK calls and outbound fetch() show up as subsegments; disabled automatically outside Lambda.
@@ -17,7 +17,7 @@ const ddb = DynamoDBDocumentClient.from(tracer.captureAWSv3Client(new DynamoDBCl
 const ssm = tracer.captureAWSv3Client(new SSMClient({}));
 const s3 = tracer.captureAWSv3Client(new S3Client({}));
 const sns = tracer.captureAWSv3Client(new SNSClient({}));
-const alertsEnv = () => ({ ddb, sns, table: process.env.SUBSCRIBERS_TABLE, topic: process.env.ALERTS_TOPIC, getAir });
+const alertsEnv = () => ({ ddb, sns, table: process.env.SUBSCRIBERS_TABLE, topic: process.env.ALERTS_TOPIC, cacheTable: process.env.CACHE_TABLE, getAir });
 const TABLE = process.env.CACHE_TABLE;
 const CACHE_SECONDS = 300;
 const CACHE_VERSION = 'v5';
@@ -288,6 +288,27 @@ async function route(event) {
       metric('AlertSubscribe', 1, 'Count', { Status: String(result.status) });
       return reply(result.status, result.body);
     } catch (error) { console.error('Subscribe failed', error.name, error.message); return unavailable(); }
+  }
+
+  // Government advisory (simulated). GET: active advisories near lat/lon (+ preview and subscriber count with count=1); POST: send one.
+  if (path.endsWith('/advisory')) {
+    if (!process.env.ALERTS_TOPIC || !process.env.SUBSCRIBERS_TABLE) return reply(503, { error: 'not_configured', message: 'Advisories are not set up on this server.' });
+    const body = method === 'POST' ? parseBody(event) : query;
+    const coords = parseCoords(body?.lat, body?.lon);
+    if (!coords) return reply(400, { error: 'invalid_request', message: 'Provide valid lat/lon.' });
+    const place = typeof body.place === 'string' && body.place.trim() ? body.place.trim().slice(0, 60) : `${coords.latitude}, ${coords.longitude}`;
+    try {
+      if (method === 'POST') {
+        const result = await sendAdvisory(alertsEnv(), coords, place);
+        if (result.status === 200) metric('AdvisorySent', result.body.recipients, 'Count', { Service: 'saans-alerts' });
+        return reply(result.status, result.body);
+      }
+      if (method !== 'GET') return reply(405, { error: 'method_not_allowed' });
+      const advisories = advisoriesNear(await readAdvisories(alertsEnv()), coords);
+      if (query.count !== '1') return reply(200, { advisories });
+      const [subscribersNearby, { payload }] = await Promise.all([countSubscribersNear(alertsEnv(), coords), getAir(coords)]);
+      return reply(200, { advisories, subscribersNearby, radiusKm: ADVISORY_KM, preview: advisoryText(payload, place) });
+    } catch (error) { console.error('Advisory failed', error.name, error.message); return unavailable(); }
   }
 
   if (method !== 'GET') return reply(404, { error: 'not_found' });

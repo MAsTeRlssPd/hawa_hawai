@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { SubscribeCommand, PublishCommand, GetSubscriptionAttributesCommand } from '@aws-sdk/client-sns';
 import { ScanCommand, GetCommand, PutCommand, DeleteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { actionsFor, PROFILES, CONDITIONS } from './guidance.mjs';
+import { haversineKm } from './sources.mjs';
 
 export const MAX_SUBSCRIBERS = 500;
 export const FREQUENCIES = ['hourly', 'changes'];
@@ -110,4 +111,77 @@ export async function alertOne({ ddb, sns, table, topic, getAir }, email, now = 
     ExpressionAttributeValues: { ':b': payload.aqi?.band?.index ?? payload.guidance?.band?.index, ':t': now.toISOString() } }))
     .catch(error => console.error('Alert sent but not recorded', sub.id, error.name));
   return 'sent';
+}
+
+// ---- Government advisory broadcast (simulated) ----
+// The government view sends one advisory for an area: every subscriber within ADVISORY_KM gets it by email (their
+// language first, then the other), and anyone opening Saans nearby sees it on Today for ADVISORY_HOURS.
+// The text is built on the server from live data (no free text), and one advisory every ADVISORY_GAP_S stops spam.
+export const ADVISORY_KM = 5, ADVISORY_HOURS = 6, ADVISORY_GAP_S = 300;
+const ADVISORY_KEY = 'advisories#v1';
+let advisoriesLocal = []; // no cache table (local dev)
+
+export function advisoryText(air, place) {
+  const aqi = air.aqi, band = aqi?.band || air.guidance?.band;
+  if (!band) return null;
+  const value = aqi?.value ?? Math.round(air.estimate?.pm2_5), unit = aqi ? 'AQI' : 'PM2.5';
+  const label = l => band.label?.[l] ?? band.label;
+  const general = actionsFor(band.index, 'general'), sensitive = actionsFor(band.index, 'heart_lung');
+  const build = (l, head, everyone, groups, dom) => {
+    const extra = sensitive[l].filter(x => !general[l].includes(x)).slice(0, 3);
+    return { title: head, text: [head, `${unit} ${value} (${label(l)})${aqi?.dominantName ? `, ${dom} ${aqi.dominantName}` : ''}.`, '', `${everyone}:`, ...general[l].slice(0, 4).map(x => `- ${x}`),
+      ...(extra.length ? ['', `${groups}:`, ...extra.map(x => `- ${x}`)] : [])].join('\n') };
+  };
+  const ascii = String(place || '').replace(/[^\x20-\x7E]/g, '').trim() || 'your area';
+  return { band: band.index, color: band.color, unit, value,
+    subject: `Saans advisory (simulated): ${unit} ${value} ${label('en')} in ${ascii}`.slice(0, 99),
+    en: build('en', `Air quality advisory for ${place} (simulated, from the Saans government view)`, 'Everyone', 'Children, older adults and people with asthma or heart disease', 'mainly'),
+    hi: build('hi', `${place} के लिए वायु गुणवत्ता परामर्श (सिम्युलेटेड, Saans सरकारी व्यू से)`, 'सभी के लिए', 'बच्चे, बुज़ुर्ग और अस्थमा या हृदय रोग वाले', 'मुख्य प्रदूषक') };
+}
+
+const near = (coords, item, km) => haversineKm(coords, { latitude: Number(item.latitude), longitude: Number(item.longitude) }) <= km;
+export const advisoriesNear = (list, coords, now = Date.now()) => list.filter(a => a.expiresAt > now && near(coords, a, a.radiusKm)).slice(0, 3);
+
+export async function readAdvisories({ ddb, cacheTable }) {
+  if (!cacheTable) return advisoriesLocal;
+  const { Item } = await ddb.send(new GetCommand({ TableName: cacheTable, Key: { cacheKey: ADVISORY_KEY } }));
+  return Item?.payload || [];
+}
+
+async function subscribersNear({ ddb, table }, coords) {
+  const subs = [];
+  let ExclusiveStartKey;
+  do {
+    const page = await ddb.send(new ScanCommand({ TableName: table, ExclusiveStartKey }));
+    subs.push(...(page.Items || []).filter(s => near(coords, s, ADVISORY_KM)));
+    ExclusiveStartKey = page.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+  return subs;
+}
+export const countSubscribersNear = async (env, coords) => (await subscribersNear(env, coords)).length;
+
+export async function sendAdvisory(env, coords, place, now = Date.now()) {
+  const { ddb, sns, topic, cacheTable, getAir } = env;
+  const list = (await readAdvisories(env)).filter(a => a.expiresAt > now);
+  const waitS = list.length ? ADVISORY_GAP_S - Math.floor((now - Date.parse(list[0].issuedAt)) / 1000) : 0;
+  if (waitS > 0) return { status: 429, body: { error: 'too_soon', message: `One advisory every ${ADVISORY_GAP_S / 60} minutes. Try again in ${Math.ceil(waitS / 60)} min.`, retryAfter: waitS } };
+  const { payload } = await getAir(coords);
+  const text = advisoryText(payload, place);
+  if (!text) return { status: 502, body: { error: 'no_data', message: 'No live reading for this place right now.' } };
+  const subs = await subscribersNear(env, coords);
+  let sent = 0;
+  for (const sub of subs) {
+    const [first, second] = sub.lang === 'hi' ? [text.hi, text.en] : [text.en, text.hi];
+    try {
+      await sns.send(new PublishCommand({ TopicArn: topic, Subject: text.subject, Message: `${first.text}\n\n----\n\n${second.text}\n\n${T[sub.lang === 'hi' ? 'hi' : 'en'].stop}`,
+        MessageAttributes: { sub: { DataType: 'String', StringValue: sub.id } } }));
+      sent++;
+    } catch (error) { console.error('Advisory publish failed', sub.id, error.name); }
+  }
+  const advisory = { id: now.toString(36), latitude: coords.latitude, longitude: coords.longitude, place: String(place).slice(0, 60), radiusKm: ADVISORY_KM,
+    issuedAt: new Date(now).toISOString(), expiresAt: now + ADVISORY_HOURS * 3600e3, band: text.band, color: text.color, unit: text.unit, value: text.value, en: text.en, hi: text.hi, recipients: sent };
+  const next = [advisory, ...list].slice(0, 5);
+  if (cacheTable) await ddb.send(new PutCommand({ TableName: cacheTable, Item: { cacheKey: ADVISORY_KEY, payload: next, expiresAt: Math.floor(now / 1000) + ADVISORY_HOURS * 3600 } }));
+  else advisoriesLocal = next;
+  return { status: 200, body: { advisory, recipients: sent, subscribersNearby: subs.length } };
 }

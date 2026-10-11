@@ -184,7 +184,7 @@ function buildPages() {
   };
   const div = (className, ...children) => { const el = document.createElement('div'); el.className = className; el.append(...children); return el; };
 
-  const today = page('today', div('today-headline'), div('briefing'), div('pollutant-section'));
+  const today = page('today', div('advisory-banner'), div('today-headline'), div('my-plan'), div('briefing'), div('pollutant-section'));
   today.querySelector('.briefing').setAttribute('aria-live', 'polite');
   const indoorCard = document.createElement('article');
   indoorCard.className = 'card indoor-card';
@@ -193,6 +193,9 @@ function buildPages() {
   wardCard.hidden = true;
   const windCard = document.createElement('article');
   windCard.className = 'card wind-card';
+  const advisoryCard = document.createElement('article');
+  advisoryCard.className = 'card advisory-card';
+  advisoryCard.addEventListener('click', event => { const button = event.target.closest('.adv-send'); if (button) sendAdvisoryNow(button); });
   const fireCard = document.createElement('article');
   fireCard.className = 'card fire-card';
   fireCard.innerHTML = '<div class="fire-head"></div><div class="fire-layout"><div class="fire-map"></div><div class="fire-side"></div></div>';
@@ -210,7 +213,7 @@ function buildPages() {
     page('health', adviceCard, div('health-body'), indoorCard, div('health-dose')),
     page('trip', div('trip-root')),
     page('challenge', div('quiz-root')),
-    page('area-watch', windCard, fireCard));
+    page('area-watch', advisoryCard, windCard, fireCard));
   // Citizen / Government switch in the top bar.
   const modeSwitch = document.createElement('div');
   modeSwitch.className = 'seg mode-switch';
@@ -261,6 +264,7 @@ function setMode(mode) {
   appMode = mode in MODES ? mode : 'citizen';
   try { localStorage.setItem('saans-mode', appMode); } catch { /* session only */ }
   renderHeadings();
+  loadAdvisories();
 }
 
 // One page at a time; the URL hash is the router so links, back button and refresh all work.
@@ -518,6 +522,121 @@ async function loadWard() {
     card.hidden = false;
   } catch { /* the card stays hidden */ }
 }
+// Government advisory broadcast (simulated): the government view sends one for its area; citizens nearby see it on Today.
+const ADV_UI = {
+  en: { kicker: 'ALERT BROADCAST · SIMULATED', title: p => 'Send an advisory to ' + p, loading: 'Checking subscribers…',
+    body: (n, km) => n + ' alert subscriber' + (n === 1 ? '' : 's') + ' within ' + km + ' km get it by email in Hindi and English, and anyone opening Saans nearby sees it on Today for 6 hours.',
+    preview: 'Preview the advisory', send: p => 'Send advisory to ' + p, sending: 'Sending…', fail: 'Could not send the advisory.',
+    sent: n => 'Sent: ' + n + ' email' + (n === 1 ? '' : 's') + '. Switch to the Citizen view to see it on Today.',
+    recent: 'Sent here in the last 6 hours', item: (t, a) => t + ' · ' + a.unit + ' ' + a.value + ' · ' + a.recipients + ' email' + (a.recipients === 1 ? '' : 's'),
+    tag: t => 'Advisory from the government view · simulated · ' + t },
+  hi: { kicker: 'अलर्ट प्रसारण · सिम्युलेटेड', title: p => p + ' को परामर्श भेजें', loading: 'सब्सक्राइबर देख रहे हैं…',
+    body: (n, km) => km + ' km के भीतर ' + n + ' अलर्ट सब्सक्राइबर को यह हिंदी और अंग्रेज़ी में ईमेल से मिलेगा, और पास में Saans खोलने वाले हर व्यक्ति को 6 घंटे तक Today पर दिखेगा।',
+    preview: 'परामर्श का पूर्वावलोकन', send: p => p + ' को परामर्श भेजें', sending: 'भेज रहे हैं…', fail: 'परामर्श नहीं भेजा जा सका।',
+    sent: n => 'भेजा गया: ' + n + ' ईमेल। Today पर देखने के लिए Citizen व्यू पर जाएँ।',
+    recent: 'पिछले 6 घंटों में यहाँ भेजे गए', item: (t, a) => t + ' · ' + a.unit + ' ' + a.value + ' · ' + a.recipients + ' ईमेल',
+    tag: t => 'सरकारी व्यू से परामर्श · सिम्युलेटेड · ' + t }
+};
+let advData = null, advToken = 0;
+const clock = iso => new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+async function loadAdvisories() {
+  const token = ++advToken, gov = appMode === 'gov';
+  if (!API_BASE) return;
+  if (gov) { advData = null; renderAdvisory(); }
+  try {
+    const result = await fetch(API_BASE + '/v1/advisory?lat=' + encodeURIComponent(selectedLocation.latitude) + '&lon=' + encodeURIComponent(selectedLocation.longitude) +
+      '&place=' + encodeURIComponent(selectedLocation.name) + (gov ? '&count=1' : ''), { cache: 'no-store' });
+    const data = await result.json();
+    if (token === advToken && result.ok) { advData = data; renderAdvisory(); }
+  } catch { /* banner and card stay as they are */ }
+}
+function renderAdvisory() {
+  const t = ADV_UI[langKey()], lang = langKey();
+  const banner = document.querySelector('.advisory-banner'), card = document.querySelector('.advisory-card');
+  const list = advData?.advisories || [];
+  banner.innerHTML = appMode === 'citizen' ? list.slice(0, 1).map(a => '<div class="alert alert-warn adv-banner" style="--band:' + safeText(a.color || '') + '"><span class="alert-icon" aria-hidden="true">📢</span><div><small class="alert-tag">' +
+    safeText(t.tag(clock(a.issuedAt))) + '</small><b>' + safeText(a[lang].title) + '</b><p class="adv-text">' + safeText(a[lang].text.split('\n').slice(1).join('\n').trim()) + '</p></div></div>').join('') : '';
+  if (appMode !== 'gov') return;
+  if (!advData) { card.innerHTML = '<span class="section-kicker">' + t.kicker + '</span><h3>' + safeText(t.title(selectedLocation.name)) + '</h3><p class="muted">' + t.loading + '</p>'; return; }
+  const p = advData.preview;
+  card.innerHTML = '<span class="section-kicker">' + t.kicker + '</span><h3>' + safeText(t.title(selectedLocation.name)) + '</h3><p class="muted">' + safeText(t.body(advData.subscribersNearby ?? 0, advData.radiusKm ?? 5)) + '</p>' +
+    (p ? '<details class="adv-preview"><summary>' + t.preview + '</summary><p class="adv-text">' + safeText(p[lang].text) + '</p><p class="adv-text">' + safeText(p[lang === 'hi' ? 'en' : 'hi'].text) + '</p></details>' : '') +
+    '<button type="button" class="next-button adv-send"' + (p ? '' : ' disabled') + '>' + safeText(t.send(selectedLocation.name)) + ' <span>→</span></button><p class="alerts-msg adv-msg" aria-live="polite"></p>' +
+    (list.length ? '<h4>' + t.recent + '</h4><ul class="adv-recent">' + list.map(a => '<li>' + safeText(t.item(clock(a.issuedAt), a)) + '</li>').join('') + '</ul>' : '');
+}
+async function sendAdvisoryNow(button) {
+  const t = ADV_UI[langKey()], msg = document.querySelector('.adv-msg');
+  button.disabled = true; msg.textContent = t.sending;
+  try {
+    const result = await fetch(API_BASE + '/v1/advisory', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ lat: selectedLocation.latitude, lon: selectedLocation.longitude, place: selectedLocation.name }) });
+    const data = await result.json();
+    if (!result.ok) throw new Error(data.message);
+    toast(t.sent(data.recipients));
+    await loadAdvisories();
+    document.querySelector('.adv-msg').textContent = t.sent(data.recipients);
+  } catch (error) { msg.textContent = error.message || t.fail; button.disabled = false; }
+}
+
+// "Your plan for today": specific steps from the onboarding answers (work, age, home, purifier) and today's air.
+const PLAN_UI = {
+  en: { kicker: 'BASED ON YOUR ANSWERS', title: 'Your plan for today',
+    delivery: () => ['N95 under your helmet today', 'Cloth and surgical masks do little against PM2.5. Keep the visor down at signals and take breaks away from main roads, in a mall, park or side lane.'],
+    construction: b => ['Cut the dust at your site', 'Wear an N95 while cutting, drilling or mixing, and ask for water spraying and breaks away from the dust.' + (b >= 5 ? ' At severe levels GRAP Stage III stops most construction in Delhi NCR.' : '')],
+    vendor: () => ['Set up away from the road edge', 'Exhaust is worst within a few metres of traffic. Stand back from the road, cover food, and wear an N95 in the morning and evening rush.'],
+    school: () => ['Ask for indoor assembly and games', 'On poor-air days schools can move PE and assembly indoors. Carry a mask for the commute.'],
+    office: () => ['Commute with the windows up', 'In a car, close the windows and set the AC to recirculate. On a bike, in an auto or on a bus, an N95 helps most at signals.'],
+    chores: at => ['Plan chores around the air', 'Sweep and dust with the windows shut' + (at ? ', then open them around ' + at + ' to air the house.' : ', and air the house when the air is cleanest.')],
+    walk: at => ['Shift your walk', 'Morning air keeps pollution near the ground. ' + (at ? 'Walk around ' + at + ' instead, or do laps indoors.' : 'Walk later in the day, or do laps indoors.')],
+    workout: (b, at) => ['Move your workout', b >= 4 ? 'Train indoors today: hard breathing pulls far more pollution into the lungs.' : (at ? 'Train around ' + at + ' and keep the intensity lower.' : 'Keep the intensity lower and stay away from main roads.')],
+    high: peak => ['High floor: less road dust, same smog', 'Living up high cuts traffic dust but not the citywide haze. Keep the windows shut' + (peak ? ' around ' + peak : ' during the worst hours') + '.'],
+    diy: () => ['No purifier? Make one', 'A box fan with a MERV-13 filter strapped to the back cleans a small room for a fraction of a purifier’s price. Run it in the bedroom with the door shut.'],
+    pregnant: () => ['Keep trips short and away from traffic', 'Pollution in pregnancy is linked to low birth weight. Rest in your cleanest room, and talk to your doctor if you feel breathless.'],
+    burning: () => ['Report garbage burning nearby', 'Burning waste spikes PM2.5 right where you live. In Delhi you can report it on the Green Delhi app.'],
+    indoorDay: () => ['Most of your day is indoors', 'Your exposure is mostly the air at home: keep windows shut during peaks and follow the indoor tips under Health.'] },
+  hi: { kicker: 'आपके जवाबों के आधार पर', title: 'आज के लिए आपकी योजना',
+    delivery: () => ['आज हेलमेट के नीचे N95 पहनें', 'कपड़े या सर्जिकल मास्क PM2.5 से ज़्यादा नहीं बचाते। सिग्नल पर वाइज़र नीचे रखें और मुख्य सड़कों से दूर (मॉल, पार्क या गली में) आराम करें।'],
+    construction: b => ['साइट पर धूल कम करें', 'काटते, ड्रिल करते या मसाला बनाते समय N95 पहनें, और पानी छिड़कने व धूल से दूर ब्रेक की माँग करें।' + (b >= 5 ? ' गंभीर स्तर पर GRAP चरण III दिल्ली NCR में ज़्यादातर निर्माण रोक देता है।' : '')],
+    vendor: () => ['सड़क के किनारे से हटकर दुकान लगाएँ', 'ट्रैफ़िक के कुछ मीटर के भीतर धुआँ सबसे ज़्यादा होता है। सड़क से पीछे खड़े हों, खाना ढककर रखें और सुबह-शाम की भीड़ में N95 पहनें।'],
+    school: () => ['प्रार्थना सभा और खेल अंदर कराने को कहें', 'ख़राब हवा वाले दिन स्कूल PE और प्रार्थना सभा अंदर करा सकते हैं। आने-जाने में मास्क रखें।'],
+    office: () => ['खिड़कियाँ बंद रखकर सफ़र करें', 'कार में खिड़कियाँ बंद करें और AC को रीसर्कुलेट पर रखें। बाइक, ऑटो या बस में सिग्नल पर N95 सबसे ज़्यादा मदद करता है।'],
+    chores: at => ['हवा के हिसाब से घर का काम', 'खिड़कियाँ बंद रखकर झाड़ू-पोछा और धूल साफ़ करें' + (at ? ', फिर ' + at + ' के आसपास घर में हवा आने दें।' : ', और सबसे साफ़ समय में हवा आने दें।')],
+    walk: at => ['सैर का समय बदलें', 'सुबह की हवा प्रदूषण को ज़मीन के पास रोके रखती है। ' + (at ? 'इसकी जगह ' + at + ' के आसपास टहलें, या घर के अंदर चलें।' : 'दिन में बाद में टहलें, या घर के अंदर चलें।')],
+    workout: (b, at) => ['व्यायाम का समय बदलें', b >= 4 ? 'आज अंदर व्यायाम करें: तेज़ साँस से फेफड़ों में कहीं ज़्यादा प्रदूषण जाता है।' : (at ? at + ' के आसपास व्यायाम करें और तीव्रता कम रखें।' : 'तीव्रता कम रखें और मुख्य सड़कों से दूर रहें।')],
+    high: peak => ['ऊँची मंज़िल: सड़क की धूल कम, स्मॉग वही', 'ऊपर रहने से ट्रैफ़िक की धूल घटती है, पर शहर भर का धुंध नहीं। ' + (peak ? peak + ' के आसपास' : 'सबसे ख़राब घंटों में') + ' खिड़कियाँ बंद रखें।'],
+    diy: () => ['प्यूरीफ़ायर नहीं है? ख़ुद बनाएँ', 'बॉक्स पंखे के पीछे MERV-13 फ़िल्टर बाँधने से छोटा कमरा प्यूरीफ़ायर की कम क़ीमत में साफ़ होता है। इसे सोने के कमरे में दरवाज़ा बंद करके चलाएँ।'],
+    pregnant: () => ['बाहर कम और ट्रैफ़िक से दूर रहें', 'गर्भावस्था में प्रदूषण का संबंध कम जन्म-वज़न से है। सबसे साफ़ कमरे में आराम करें, और साँस फूले तो डॉक्टर से बात करें।'],
+    burning: () => ['पास में कूड़ा जलाने की शिकायत करें', 'कूड़ा जलाने से आपके घर के पास PM2.5 तेज़ी से बढ़ता है। दिल्ली में Green Delhi ऐप पर शिकायत कर सकते हैं।'],
+    indoorDay: () => ['आपका ज़्यादातर दिन घर के अंदर है', 'आपका संपर्क मुख्य रूप से घर की हवा से है: चरम समय पर खिड़कियाँ बंद रखें और Health में घर के सुझाव देखें।'] }
+};
+function planItems(data) {
+  const t = PLAN_UI[langKey()], a = aboutMe, b = (data.aqi?.band || data.guidance?.band)?.index ?? 0;
+  const best = cleanestWindow(data.forecast), at = best && formatTime(best.from) + '–' + formatTime(best.to);
+  const next = (data.forecast || []).slice(0, 13).filter(p => Number.isFinite(p.pm2_5));
+  const peak = next.length > 2 ? formatTime(next.reduce((x, y) => y.pm2_5 > x.pm2_5 ? y : x).time) : null;
+  const young = a.work === 'student' || a.age === 'child' || a.age === 'teen';
+  return [
+    b >= 2 && a.work === 'delivery' && ['🛵', ...t.delivery()],
+    b >= 2 && a.work === 'construction' && ['🏗', ...t.construction(b)],
+    b >= 2 && a.work === 'vendor' && ['🛒', ...t.vendor()],
+    b >= 3 && young && ['🎒', ...t.school()],
+    b >= 2 && a.work === 'office' && ['🚗', ...t.office()],
+    b >= 1 && a.work === 'homemaker' && ['🧹', ...t.chores(at)],
+    b >= 2 && (a.work === 'retired' || a.age === 'senior') && ['🚶', ...t.walk(at)],
+    b >= 2 && a.work === 'athlete' && ['🏃', ...t.workout(b, at)],
+    b >= 2 && a.pregnant && ['🤰', ...t.pregnant()],
+    b >= 2 && a.floor === 'high' && ['🏢', ...t.high(peak)],
+    b >= 3 && a.purifier === false && ['🌀', ...t.diy()],
+    b >= 1 && a.near?.includes('burning') && ['🔥', ...t.burning()],
+    b >= 3 && a.outdoors === 'lt1' && ['🏠', ...t.indoorDay()]
+  ].filter(Boolean).slice(0, 6);
+}
+function renderPlan() {
+  const box = document.querySelector('.my-plan'), t = PLAN_UI[langKey()];
+  const items = lastData ? planItems(lastData) : [];
+  box.innerHTML = items.length ? '<article class="card plan-card"><span class="section-kicker">' + t.kicker + '</span><h3>' + t.title + '</h3><ul class="indoor-list">' +
+    items.map(([icon, title, body]) => '<li class="mine"><span class="indoor-icon" aria-hidden="true">' + icon + '</span><span><b>' + safeText(title) + '</b><small>' + safeText(body) + '</small></span></li>').join('') + '</ul></article>' : '';
+}
 // AQI upper bounds mapped to BANDS rows (CPCB 50/100/200/300/400/500).
 const AQI_BANDS = [[50, 0], [100, 1], [200, 2], [300, 3], [400, 4], [Infinity, 5]];
 
@@ -751,6 +870,8 @@ function renderBriefing() {
     feed.innerHTML = briefingItems(data).map(item => `<div class="alert alert-${item.tone}"><span class="alert-icon" aria-hidden="true">${item.icon}</span><div>${item.tag ? `<small class="alert-tag">${safeText(item.tag)}</small>` : ''}<b>${safeText(item.title)}</b>${item.body ? `<p>${safeText(item.body)}</p>` : ''}</div></div>`).join('') + `<a class="alert-more" href="#health">${copy.seeGuidance}</a>`;
   }
   headline.querySelector('.persona-chip').addEventListener('click', openProfile);
+  renderPlan();
+  renderAdvisory();
   renderPollutants();
 }
 
@@ -828,6 +949,7 @@ function render(data) {
   renderCoverageMap(data.stations);
   renderForecast(data.forecast);
   loadWard();
+  loadAdvisories();
   renderPersonal();
   renderWeather();
   loadFires();

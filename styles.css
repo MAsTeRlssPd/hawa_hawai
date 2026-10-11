@@ -349,3 +349,11 @@
 .airspace-stage .leaflet-top.leaflet-left,.trip-stage .leaflet-top.leaflet-left{left:auto;right:0}.fire-card .leaflet-top.leaflet-left{top:auto;bottom:0}
 .quiz-past>div>.quiz-q{display:none}.quiz-past>div{padding-top:4px}
 @media(max-width:900px){.airspace-stage .stations-card,.trip-panel{max-height:none}}
+
+/* Advisory broadcast (government) and banner (citizen); personal plan */
+.advisory-card{padding:18px 20px;margin-bottom:13px;border:1px solid #f0d9b5;background:linear-gradient(135deg,#fffaf1,#fff)}.advisory-card h3{margin:3px 0 4px;font:700 17px Manrope,sans-serif;color:var(--ink)}
+.advisory-card .next-button{margin-top:10px}.advisory-card h4{margin:14px 0 4px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.adv-preview{margin-top:8px;font-size:12px}.adv-preview summary{cursor:pointer;color:var(--ink);font-weight:600}.adv-text{white-space:pre-line;margin:6px 0 0;font-size:12px;line-height:1.5}
+.adv-preview .adv-text{padding:10px 12px;border-radius:10px;background:#f6f8f5}.adv-recent{margin:0;padding-left:18px;font-size:12px;color:#4d6358}
+.advisory-banner:empty,.my-plan:empty{display:none}.advisory-banner{margin-bottom:12px}.adv-banner{border-left:4px solid var(--band,#d08b61)}
+.my-plan{margin:12px 0}.plan-card{padding:18px 20px}.plan-card h3{margin:3px 0 8px;font:700 16px Manrope,sans-serif;color:var(--ink)}
