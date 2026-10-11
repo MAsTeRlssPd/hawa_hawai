@@ -160,14 +160,14 @@ export function aqiBandFor(aqi) {
   return { ...band, index };
 }
 
-// hourly: Open-Meteo arrays (pm in µg/m³, CO in µg/m³). pmScale: per-hour PM2.5 multiplier, or null for the monthly factor.
-// Rolling 24 h mean (8 h for O3/CO) with 16/6 h minimum; AQI = max sub-index, needing PM and at least 3 pollutants.
+// hourly: Open-Meteo arrays (pm in µg/m³, CO in µg/m³). pmScale: station/model PM2.5 ratio, applied to PM10 too
+// (CAMS dust spikes otherwise pin PM10 at 500), or null for the monthly factors. Rolling 24 h mean (8 h for O3/CO) with 16/6 h minimum; AQI = max sub-index, needing PM and at least 3 pollutants.
 export function aqiSeries(hourly, pmScale = null) {
   const time = hourly.time || [];
   const month = i => Number(time[i].slice(5, 7)) - 1;
   const series = {
     pm2_5: (hourly.pm2_5 || []).map((v, i) => v == null ? null : v * (pmScale ?? PM25_FACTOR[month(i)])),
-    pm10: (hourly.pm10 || []).map((v, i) => v == null ? null : v * PM10_FACTOR[month(i)]),
+    pm10: (hourly.pm10 || []).map((v, i) => v == null ? null : v * (pmScale ?? PM10_FACTOR[month(i)])),
     nitrogen_dioxide: hourly.nitrogen_dioxide || [], sulphur_dioxide: hourly.sulphur_dioxide || [],
     ozone: hourly.ozone || [], carbon_monoxide: (hourly.carbon_monoxide || []).map(v => v == null ? null : v / 1000)
   };
