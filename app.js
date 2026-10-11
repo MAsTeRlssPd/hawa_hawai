@@ -633,6 +633,8 @@ function renderSchematicMap(stations = []) {
 // Hover/tap read-out for an SVG chart 720 units wide holding n evenly spaced items (bars when centred).
 function chartTip(svg, n, html, centred = false) {
   const wrap = svg.parentElement;
+  // The tip is placed in the wrapper's coordinates, so the wrapper must be its containing block.
+  if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
   let tip = wrap.querySelector('.chart-tip');
   if (!tip) { tip = document.createElement('div'); tip.className = 'chart-tip'; tip.hidden = true; wrap.append(tip); }
   let cursor = svg.querySelector('.chart-cursor');
