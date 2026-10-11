@@ -80,7 +80,7 @@ Serve the website locally for development. The stack also hosts it on AWS Amplif
 
 ## Delhi ward GNN forecaster (optional, separate stack)
 
-The app does not show these forecasts at the moment (AQI forecasting was removed from the UI); the stack still runs on its own. `gnn/` packages the WardGraphTransformer from [mansi724/PROJECT-AQI](https://github.com/mansi724/PROJECT-AQI) (pinned commit) as an x86_64 container Lambda that runs hourly (EventBridge Scheduler), fetches fresh CAMS + weather, and writes `ward-forecast/latest.json` to the main stack's `ForecastBucket`. Needs Docker. About 70 s and 1.4 GB per run.
+The app does not show these forecasts at the moment (AQI forecasting was removed from the UI); it can still be deployed as its own stack. `gnn/` packages the WardGraphTransformer from [mansi724/PROJECT-AQI](https://github.com/mansi724/PROJECT-AQI) (pinned commit) as an x86_64 container Lambda that runs hourly (EventBridge Scheduler), fetches fresh CAMS + weather, and writes `ward-forecast/latest.json` to the main stack's `ForecastBucket`. Needs Docker. About 70 s and 1.4 GB per run.
 
 ```sh
 cd gnn && sam build && sam deploy --parameter-overrides ForecastBucket=<ForecastBucketName output>
