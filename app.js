@@ -56,7 +56,7 @@ const UI = {
   en: { bandSuffix: 'CPCB PM2.5 band · indicative', guidanceKicker: 'GUIDANCE FOR TODAY', forWho: 'What to do', cpcbSays: 'CPCB health impact', cleanest: 'Cleanest hours in the next day (model)',
     editProfile: 'Change persona or conditions', condTag: label => `Your condition · ${label}`,
     aqiCircle: 'AQI · indicative', aqiMostly: name => `Mostly ${name}`, aqiNote: 'Indicative AQI (CPCB method on model data), not the official CPCB AQI.', outlookL: h => `In ${h} h`,
-    tipAt: (t, pm, aqi) => `<b>${t}</b>PM2.5 ${pm} µg/m³${aqi == null ? '' : ` · AQI ${aqi}`}`, spike: 'Spike', dip: 'Dip', explainTitle: 'Why the line jumps', explainLoading: 'Looking for unusual hours…', explainNone: 'No unusual spikes or dips in this period.', viaBedrockShort: 'Explained by Amazon Bedrock', viaRulesShort: 'Explained from weather data',
+    tipAt: (t, pm, aqi) => `<b>${t}</b>PM2.5 ${pm} µg/m³${aqi == null ? '' : ` · AQI ${aqi}`}`, spike: 'Spike', dip: 'Dip', explainTitle: 'Why the line jumps', explainLoading: 'Looking for unusual hours…', explainNone: 'No unusual spikes or dips in this period.', viaBedrockShort: 'Explained by Amazon Bedrock', viaGeminiShort: 'Explained by Gemini', viaRulesShort: 'Explained from weather data',
     indoorKicker: 'INDOOR AIR', indoorTitle: 'Cleaner air at home', indoorIntro: pm => `Outdoor PM2.5 is ~${pm} µg/m³. With windows shut, part of it still leaks in, so indoor air is rarely much cleaner without a filter.`,
     wardKicker: 'DELHI WARD FORECAST · GRAPH NEURAL NETWORK', wardTitle: name => `AQI outlook for ${name}`, wardBody: km => `Nearest of 289 wards (~${km} km). Range = 80% conformal interval.`, wardNote: 'WardGraphTransformer trained on CPCB stations (mansi724/PROJECT-AQI), run hourly on CAMS + weather.',
     newChat: 'New chat',
@@ -75,7 +75,7 @@ const UI = {
     notMedical: 'Not medical advice', noEstimate: 'Guidance appears once a PM2.5 estimate is available.',
     windKicker: 'LIVE WIND · OPEN-METEO', windTitle: 'Where your air is coming from', windFrom: dir => `Air is arriving from the ${dir}`, gusts: 'gusts', next24: 'Next 24 hours',
     ncrSmoke: 'Winds from the north-west can carry stubble smoke from Punjab and Haryana in Oct–Nov. Check hotspots before assuming smoke is the cause.', ncrClear: 'Current winds are not from the Punjab–Haryana direction.', windUnavailable: 'Live wind data is unavailable right now.',
-    askPlaceholder: 'Ask about your air…', thinking: 'Thinking…', you: 'You', viaBedrock: 'Answered with Amazon Bedrock from live data + CPCB guidance', viaRules: 'Answered from live data + CPCB guidance', askFailed: 'Could not reach Saans right now. Please try again.',
+    askPlaceholder: 'Ask about your air…', thinking: 'Thinking…', you: 'You', viaBedrock: 'Answered with Amazon Bedrock from live data + CPCB guidance', viaGemini: 'Answered with Gemini from live data + CPCB guidance', viaRules: 'Answered from live data + CPCB guidance', askFailed: 'Could not reach Saans right now. Please try again.',
     modelOnly: 'Model only · no recent station nearby', outliers: n => `${n} outlier${n === 1 ? '' : 's'} excluded`, outlierTag: 'Outlier · excluded', recent: 'Recent', stale: 'Stale', useMyLocation: '⌖ Use my location',
     headline: (band, place) => `${band} air in ${place}`, planningFor: 'Planning for', change: 'Change', forYou: label => `For you · ${label}`,
     bestTime: (from, to) => `Best time to be outside: ${from} – ${to}`, bestTimeBody: avg => `The model expects the cleanest air of the day then (~${avg} µg/m³).`,
@@ -108,7 +108,7 @@ const UI = {
   hi: { bandSuffix: 'CPCB PM2.5 श्रेणी · संकेतात्मक', guidanceKicker: 'आज के लिए सलाह', forWho: 'क्या करें', cpcbSays: 'CPCB के अनुसार स्वास्थ्य प्रभाव', cleanest: 'अगले 24 घंटों में सबसे साफ़ समय (मॉडल)',
     editProfile: 'व्यक्ति या बीमारी बदलें', condTag: label => `आपकी स्थिति · ${label}`,
     aqiCircle: 'AQI · संकेतात्मक', aqiMostly: name => `मुख्यतः ${name}`, aqiNote: 'संकेतात्मक AQI (मॉडल डेटा पर CPCB तरीका), आधिकारिक CPCB AQI नहीं।', outlookL: h => `${h} घंटे में`,
-    tipAt: (t, pm, aqi) => `<b>${t}</b>PM2.5 ${pm} µg/m³${aqi == null ? '' : ` · AQI ${aqi}`}`, spike: 'उछाल', dip: 'गिरावट', explainTitle: 'रेखा क्यों उछलती है', explainLoading: 'असामान्य घंटे खोज रहे हैं…', explainNone: 'इस अवधि में कोई असामान्य उछाल या गिरावट नहीं।', viaBedrockShort: 'Amazon Bedrock द्वारा व्याख्या', viaRulesShort: 'मौसम डेटा से व्याख्या',
+    tipAt: (t, pm, aqi) => `<b>${t}</b>PM2.5 ${pm} µg/m³${aqi == null ? '' : ` · AQI ${aqi}`}`, spike: 'उछाल', dip: 'गिरावट', explainTitle: 'रेखा क्यों उछलती है', explainLoading: 'असामान्य घंटे खोज रहे हैं…', explainNone: 'इस अवधि में कोई असामान्य उछाल या गिरावट नहीं।', viaBedrockShort: 'Amazon Bedrock द्वारा व्याख्या', viaGeminiShort: 'Gemini द्वारा व्याख्या', viaRulesShort: 'मौसम डेटा से व्याख्या',
     indoorKicker: 'घर के अंदर की हवा', indoorTitle: 'घर में साफ़ हवा', indoorIntro: pm => `बाहर PM2.5 ~${pm} µg/m³ है। खिड़कियाँ बंद होने पर भी इसका कुछ हिस्सा अंदर आता है, इसलिए फ़िल्टर के बिना अंदर की हवा ज़्यादा साफ़ नहीं होती।`,
     wardKicker: 'दिल्ली वार्ड पूर्वानुमान · ग्राफ़ न्यूरल नेटवर्क', wardTitle: name => `${name} के लिए AQI अनुमान`, wardBody: km => `289 वार्डों में सबसे पास (~${km} km)। सीमा = 80% कॉन्फ़ॉर्मल अंतराल।`, wardNote: 'CPCB स्टेशनों पर प्रशिक्षित WardGraphTransformer (mansi724/PROJECT-AQI), हर घंटे CAMS + मौसम पर चलता है।',
     newChat: 'नई बातचीत',
@@ -127,7 +127,7 @@ const UI = {
     notMedical: 'चिकित्सकीय सलाह नहीं', noEstimate: 'PM2.5 अनुमान मिलने पर सलाह दिखेगी।',
     windKicker: 'लाइव हवा · OPEN-METEO', windTitle: 'आपकी हवा कहाँ से आ रही है', windFrom: dir => `हवा ${dir} दिशा से आ रही है`, gusts: 'झोंके', next24: 'अगले 24 घंटे',
     ncrSmoke: 'अक्टूबर–नवंबर में उत्तर-पश्चिमी हवाएँ पंजाब और हरियाणा से पराली का धुआँ ला सकती हैं।', ncrClear: 'अभी हवा पंजाब–हरियाणा की दिशा से नहीं आ रही है।', windUnavailable: 'लाइव हवा का डेटा अभी उपलब्ध नहीं है।',
-    askPlaceholder: 'अपनी हवा के बारे में पूछें…', thinking: 'सोच रहा हूँ…', you: 'आप', viaBedrock: 'Amazon Bedrock द्वारा लाइव डेटा + CPCB सलाह से उत्तर', viaRules: 'लाइव डेटा + CPCB सलाह से उत्तर', askFailed: 'अभी Saans से संपर्क नहीं हो पाया। फिर कोशिश करें।',
+    askPlaceholder: 'अपनी हवा के बारे में पूछें…', thinking: 'सोच रहा हूँ…', you: 'आप', viaBedrock: 'Amazon Bedrock द्वारा लाइव डेटा + CPCB सलाह से उत्तर', viaGemini: 'Gemini द्वारा लाइव डेटा + CPCB सलाह से उत्तर', viaRules: 'लाइव डेटा + CPCB सलाह से उत्तर', askFailed: 'अभी Saans से संपर्क नहीं हो पाया। फिर कोशिश करें।',
     modelOnly: 'केवल मॉडल · पास में हाल का स्टेशन नहीं', outliers: n => `${n} असामान्य रीडिंग हटाई गई`, outlierTag: 'असामान्य · हटाया', recent: 'हाल का', stale: 'पुराना', useMyLocation: '⌖ मेरा स्थान',
     headline: (band, place) => `${place} में हवा: ${band}`, planningFor: 'किसके लिए', change: 'बदलें', forYou: label => `आपके लिए · ${label}`,
     bestTime: (from, to) => `बाहर जाने का सबसे अच्छा समय: ${from} – ${to}`, bestTimeBody: avg => `मॉडल के अनुसार तब दिन की सबसे साफ़ हवा होगी (~${avg} µg/m³)।`,
@@ -572,8 +572,8 @@ function loadExplain(kind, days = 30) {
 function explainHtml(result, copy, label) {
   if (!result) return '';
   const items = result.anomalies.map(a => `<li class="ex-${a.kind}"><b>${safeText(label(a.time))} · ${a.kind === 'spike' ? copy.spike : copy.dip} ${a.value} µg/m³</b> ${safeText(a.note)}</li>`).join('');
-  const llm = result.mode === 'bedrock';
-  return `<h4>${copy.explainTitle} <span class="mode-badge ${llm ? 'bedrock' : 'rules'}">${llm ? copy.viaBedrockShort : copy.viaRulesShort}</span></h4>${llm && result.summary ? `<p>${safeText(result.summary)}</p>` : ''}${items ? `<ul>${items}</ul>` : `<p class="muted">${copy.explainNone}</p>`}`;
+  const llm = result.mode === 'bedrock' || result.mode === 'gemini';
+  return `<h4>${copy.explainTitle} <span class="mode-badge ${llm ? 'bedrock' : 'rules'}">${result.mode === 'gemini' ? copy.viaGeminiShort : llm ? copy.viaBedrockShort : copy.viaRulesShort}</span></h4>${llm && result.summary ? `<p>${safeText(result.summary)}</p>` : ''}${items ? `<ul>${items}</ul>` : `<p class="muted">${copy.explainNone}</p>`}`;
 }
 
 // Zero-length round-capped stroke = a dot that stays round on a non-uniformly scaled chart.
@@ -906,7 +906,7 @@ async function ask(question) {
     const data = await result.json();
     if (!result.ok) throw new Error(data.message);
     chatHistory.push({ role: 'user', text: question }, { role: 'assistant', text: data.answer });
-    turn.querySelector('.chat-a').outerHTML = `<p class="chat-a">${safeText(data.answer)}</p><div class="chat-sources">${data.sources.map(s => `<a href="${safeText(s.url)}" target="_blank" rel="noreferrer">${safeText(s.label)} ↗</a>`).join('')}</div><small class="chat-mode">${data.mode === 'bedrock' ? copy.viaBedrock : copy.viaRules}</small>`;
+    turn.querySelector('.chat-a').outerHTML = `<p class="chat-a">${safeText(data.answer)}</p><div class="chat-sources">${data.sources.map(s => `<a href="${safeText(s.url)}" target="_blank" rel="noreferrer">${safeText(s.label)} ↗</a>`).join('')}</div><small class="chat-mode">${data.mode === 'bedrock' ? copy.viaBedrock : data.mode === 'gemini' ? copy.viaGemini : copy.viaRules}</small>`;
   } catch {
     turn.querySelector('.chat-a').outerHTML = `<p class="chat-a">${copy.askFailed}</p>`;
   } finally {

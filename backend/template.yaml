@@ -18,6 +18,13 @@ Parameters:
     Type: String
     Default: apac.amazon.nova-lite-v1:0
     Description: Bedrock model or inference profile for Ask Saans. Empty string uses the built-in rule-based answers only.
+  GeminiParameterName:
+    Type: String
+    Default: /saans/prod/gemini-api-key
+    Description: SSM SecureString holding a Google Gemini API key, tried when Bedrock fails. Missing parameter = skipped.
+  GeminiModelId:
+    Type: String
+    Default: gemini-flash-latest
   AppUrl:
     Type: String
     Default: ''
@@ -34,6 +41,8 @@ Globals:
         CACHE_TABLE: !Ref AirCache
         OPENAQ_PARAMETER_NAME: !Ref OpenAqParameterName
         FIRMS_PARAMETER_NAME: !Ref FirmsParameterName
+        GEMINI_PARAMETER_NAME: !Ref GeminiParameterName
+        GEMINI_MODEL_ID: !Ref GeminiModelId
         POWERTOOLS_SERVICE_NAME: saans-api
         BEDROCK_MODEL_ID: !Ref BedrockModelId
         FORECAST_BUCKET: !Ref ForecastBucket
@@ -138,6 +147,7 @@ Resources:
               Resource:
                 - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OpenAqParameterName}'
                 - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${FirmsParameterName}'
+                - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GeminiParameterName}'
             - Effect: Allow
               Action: [kms:Decrypt]
               Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
@@ -423,7 +433,7 @@ Resources:
           {"type":"metric","x":0,"y":12,"width":8,"height":6,"properties":{"title":"Cache hits vs misses (air)","region":"${AWS::Region}","stat":"Sum","period":300,
             "metrics":[["Saans","CacheHit","Route","air"],[".","CacheMiss",".","."]]}},
           {"type":"metric","x":8,"y":12,"width":8,"height":6,"properties":{"title":"Ask Saans answers by mode","region":"${AWS::Region}","stat":"Sum","period":300,
-            "metrics":[["Saans","AskAnswered","Mode","bedrock"],["...","rules"],[".","ExplainAnswered",".","bedrock"],["...","rules"]]}},
+            "metrics":[["Saans","AskAnswered","Mode","bedrock"],["...","gemini"],["...","rules"],[".","ExplainAnswered",".","bedrock"],["...","gemini"],["...","rules"]]}},
           {"type":"metric","x":16,"y":12,"width":8,"height":6,"properties":{"title":"FIRMS fire detections (India bbox, 24h)","region":"${AWS::Region}","stat":"Maximum","period":1800,
             "metrics":[["Saans","FireDetections","Days","1"]]}},
           {"type":"log","x":0,"y":18,"width":24,"height":6,"properties":{"title":"Slowest API requests","region":"${AWS::Region}",

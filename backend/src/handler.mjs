@@ -6,7 +6,7 @@ import { SNSClient } from '@aws-sdk/client-sns';
 import { readFile } from 'node:fs/promises';
 import { Tracer } from '@aws-lambda-powertools/tracer';
 import { guidanceFor, PROFILES, CONDITIONS, POLLUTANT_KEYS, pollutantsFor, aqiSeries, aqiBandFor, CONFORMAL_DELTA, POLLUTANT_NAMES } from './guidance.mjs';
-import { answer, explainSeries, cleanAbout, llmConfigured } from './assistant.mjs';
+import { answer, explainSeries, cleanAbout, llmConfigured, keys } from './assistant.mjs';
 import { planTrip, MAX_TRIP_KM } from './routes.mjs';
 import { subscribe, listSubscribers, alertOne } from './alerts.mjs';
 import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFires, upwindFires, INDIA_BBOX, fetchHistory, historyCsv, geocode } from './sources.mjs';
@@ -46,6 +46,7 @@ async function getSecret(envName, parameterName) {
 }
 const getOpenAqKey = () => getSecret('OPENAQ_API_KEY', process.env.OPENAQ_PARAMETER_NAME);
 const getFirmsKey = () => getSecret('FIRMS_MAP_KEY', process.env.FIRMS_PARAMETER_NAME);
+keys.gemini = () => getSecret('GEMINI_API_KEY', process.env.GEMINI_PARAMETER_NAME);
 
 async function fetchStations(latitude, longitude) {
   const key = await getOpenAqKey();
@@ -250,7 +251,7 @@ async function route(event) {
   const path = event.rawPath || event.path || '';
   const query = event.queryStringParameters || {};
   tracer.putAnnotation('route', path.split('/').pop() || 'root');
-  if (path.endsWith('/health')) return reply(200, { status: 'ok', service: 'saans-api', time: new Date().toISOString(), assistant: process.env.BEDROCK_MODEL_ID ? 'bedrock' : 'rules', llm: llmConfigured() });
+  if (path.endsWith('/health')) return reply(200, { status: 'ok', service: 'saans-api', time: new Date().toISOString(), assistant: [process.env.BEDROCK_MODEL_ID && 'bedrock', (process.env.GEMINI_PARAMETER_NAME || process.env.GEMINI_API_KEY) && 'gemini', 'rules'].filter(Boolean).join(' > '), llm: llmConfigured() });
 
   if (path.endsWith('/ask')) {
     if (method !== 'POST') return reply(405, { error: 'method_not_allowed' });

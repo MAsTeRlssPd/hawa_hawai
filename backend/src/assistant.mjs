@@ -1,10 +1,13 @@
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { actionsFor, CPCB_SOURCE } from './guidance.mjs';
 
-// Bedrock when configured, otherwise (or on failure) the rule-based answers.
+// Bedrock first, then Google Gemini, then the rule-based answers.
 const MODEL_ID = process.env.BEDROCK_MODEL_ID;
 const bedrock = MODEL_ID ? new BedrockRuntimeClient({}) : null;
-export const llmConfigured = () => Boolean(bedrock);
+const GEMINI_MODEL = process.env.GEMINI_MODEL_ID || 'gemini-flash-latest';
+// handler.mjs swaps in an SSM-backed getter; locally GEMINI_API_KEY works.
+export const keys = { gemini: async () => process.env.GEMINI_API_KEY || null };
+export const llmConfigured = () => Boolean(bedrock || process.env.GEMINI_PARAMETER_NAME || process.env.GEMINI_API_KEY);
 const PROFILE_LABEL = {
   en: { general: 'most adults', outdoor_worker: 'construction and outdoor workers', commuter: 'delivery riders and daily commuters', athlete: 'people who run or exercise outdoors', children: 'children', older: 'older adults', pregnant: 'pregnant women', heart_lung: 'people with heart or lung conditions' },
   hi: { general: 'अधिकांश वयस्कों', outdoor_worker: 'निर्माण और बाहर काम करने वालों', commuter: 'डिलीवरी राइडरों और रोज़ सफ़र करने वालों', athlete: 'बाहर दौड़ने या व्यायाम करने वालों', children: 'बच्चों', older: 'बुज़ुर्गों', pregnant: 'गर्भवती महिलाओं', heart_lung: 'हृदय या फेफड़े के रोग वाले लोगों' }
@@ -119,6 +122,21 @@ async function converse(system, messages, maxTokens) {
       const text = result.output?.message?.content?.map(part => part.text || '').join('').trim();
       if (text) return { text, mode: 'bedrock' };
     } catch (error) { console.warn('Bedrock unavailable', error.name); }
+  }
+  const key = await keys.gemini();
+  if (key) {
+    try {
+      // Thinking models count reasoning tokens against maxOutputTokens, so leave headroom; the prompt caps answer length.
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, signal: AbortSignal.timeout(12000),
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, generationConfig: { maxOutputTokens: maxTokens + 1500, temperature: 0.3 },
+          contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: m.content.map(c => ({ text: c.text })) })) })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const text = (data.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('').trim();
+      if (text) return { text, mode: 'gemini' };
+    } catch (error) { console.warn('Gemini unavailable', error.message); }
   }
   return null;
 }
