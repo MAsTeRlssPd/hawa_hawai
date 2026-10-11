@@ -11,7 +11,7 @@ Saans helps people understand local air conditions and plan around changes. The 
 - Overview adds a 30/90-day history chart (CAMS PM2.5 bars, ERA5 peak ventilation line) with a simple backtest and a CSV download.
 - Airspace is a full-page OpenStreetMap (Leaflet) map with a monitor panel over it: nearest monitor, recent average and how many report now, then numbered cards coloured by CPCB band. Tapping a card flies the map to that monitor.
 - Today leads with an indicative AQI circle (CPCB method, dominant pollutant).
-- Overview charts are hoverable (time, PM2.5, AQI); unusual hours/days are dotted and explained by Bedrock or Gemini (or weather rules). Inside Delhi a ward card shows the GNN forecast.
+- Overview charts are hoverable (time, PM2.5, AQI); unusual hours/days are dotted and explained by Bedrock or Gemini (or weather rules).
 - Health & guidance merges persona and condition actions (asthma, COPD, dust allergy, heart disease, diabetes), indoor-air tips (HEPA sizing by CADR, ventilation timing, smoke, cooking, dust, CO, ozone, an honest note on plants) and the lung explainer. Old `#guidance` links redirect.
 - Health shows an animated lung for every pollutant (worst first): where it deposits (nose/throat, trachea, bronchi, bronchioles, alveoli, blood), short- and long-term effects, the multiple of the WHO 2021 guideline, a persona risk line, and dose figures (cigarette equivalent, air breathed per day, AQLI life-years).
 - Area watch has the fire map as the card background with the summary floating over it, and shows live weather (temperature, humidity, mixing height, IMD ventilation index) and NASA FIRMS fire hotspots for India over 1/3/7 days, with the 500 km upwind zone drawn from the current wind.
@@ -80,7 +80,7 @@ Serve the website locally for development. The stack also hosts it on AWS Amplif
 
 ## Delhi ward GNN forecaster (optional, separate stack)
 
-`gnn/` packages the WardGraphTransformer from [mansi724/PROJECT-AQI](https://github.com/mansi724/PROJECT-AQI) (pinned commit) as an x86_64 container Lambda that runs hourly (EventBridge Scheduler), fetches fresh CAMS + weather, and writes `ward-forecast/latest.json` to the main stack's `ForecastBucket`. Needs Docker. About 70 s and 1.4 GB per run.
+The app does not show these forecasts at the moment (AQI forecasting was removed from the UI); the stack still runs on its own. `gnn/` packages the WardGraphTransformer from [mansi724/PROJECT-AQI](https://github.com/mansi724/PROJECT-AQI) (pinned commit) as an x86_64 container Lambda that runs hourly (EventBridge Scheduler), fetches fresh CAMS + weather, and writes `ward-forecast/latest.json` to the main stack's `ForecastBucket`. Needs Docker. About 70 s and 1.4 GB per run.
 
 ```sh
 cd gnn && sam build && sam deploy --parameter-overrides ForecastBucket=<ForecastBucketName output>
