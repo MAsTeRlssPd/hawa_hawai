@@ -2,10 +2,13 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { SNSClient } from '@aws-sdk/client-sns';
 import { readFile } from 'node:fs/promises';
 import { Tracer } from '@aws-lambda-powertools/tracer';
 import { guidanceFor, PROFILES, CONDITIONS, POLLUTANT_KEYS, pollutantsFor, aqiSeries, aqiBandFor, CONFORMAL_DELTA, POLLUTANT_NAMES } from './guidance.mjs';
-import { answer, explainSeries } from './assistant.mjs';
+import { answer, explainSeries, cleanAbout, llmConfigured } from './assistant.mjs';
+import { planTrip, MAX_TRIP_KM } from './routes.mjs';
+import { subscribe, runHourly } from './alerts.mjs';
 import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFires, upwindFires, INDIA_BBOX, fetchHistory, historyCsv, geocode } from './sources.mjs';
 
 // X-Ray: AWS SDK calls and outbound fetch() show up as subsegments; disabled automatically outside Lambda.
@@ -13,6 +16,8 @@ const tracer = new Tracer({ serviceName: 'saans-api' });
 const ddb = DynamoDBDocumentClient.from(tracer.captureAWSv3Client(new DynamoDBClient({})), { marshallOptions: { removeUndefinedValues: true } });
 const ssm = tracer.captureAWSv3Client(new SSMClient({}));
 const s3 = tracer.captureAWSv3Client(new S3Client({}));
+const sns = tracer.captureAWSv3Client(new SNSClient({}));
+const alertsEnv = () => ({ ddb, sns, table: process.env.SUBSCRIBERS_TABLE, topic: process.env.ALERTS_TOPIC, getAir });
 const TABLE = process.env.CACHE_TABLE;
 const CACHE_SECONDS = 300;
 const CACHE_VERSION = 'v5';
@@ -174,7 +179,7 @@ async function getFires(days) {
 }
 
 // Returns { payload, cache } or throws when no provider produced data.
-async function getAir({ latitude, longitude }) {
+export async function getAir({ latitude, longitude }) {
   const cacheKey = `air:${CACHE_VERSION}:${latitude.toFixed(2)}:${longitude.toFixed(2)}`;
   const cachedPayload = await loadCached(cacheKey);
   metric(cachedPayload ? 'CacheHit' : 'CacheMiss', 1, 'Count', { Route: 'air' });
@@ -245,7 +250,7 @@ async function route(event) {
   const path = event.rawPath || event.path || '';
   const query = event.queryStringParameters || {};
   tracer.putAnnotation('route', path.split('/').pop() || 'root');
-  if (path.endsWith('/health')) return reply(200, { status: 'ok', service: 'saans-api', time: new Date().toISOString(), assistant: process.env.BEDROCK_MODEL_ID ? 'bedrock' : 'rules' });
+  if (path.endsWith('/health')) return reply(200, { status: 'ok', service: 'saans-api', time: new Date().toISOString(), assistant: process.env.BEDROCK_MODEL_ID ? 'bedrock' : 'rules', llm: llmConfigured() });
 
   if (path.endsWith('/ask')) {
     if (method !== 'POST') return reply(405, { error: 'method_not_allowed' });
@@ -258,9 +263,10 @@ async function route(event) {
     const place = typeof body.place === 'string' ? body.place.slice(0, 60) : '';
     const conditions = Array.isArray(body.conditions) ? body.conditions.filter(c => CONDITIONS.includes(c)) : [];
     const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
+    const about = cleanAbout(body.about);
     try {
       const { payload } = await getAir(coords);
-      const result = await answer(question, payload, { profile, lang, place, conditions, history });
+      const result = await answer(question, payload, { profile, lang, place, conditions, history, about });
       metric('AskAnswered', 1, 'Count', { Mode: result.mode });
       tracer.putAnnotation('askMode', result.mode);
       return reply(200, result);
@@ -270,7 +276,40 @@ async function route(event) {
     }
   }
 
+  if (path.endsWith('/alerts')) {
+    if (method !== 'POST') return reply(405, { error: 'method_not_allowed' });
+    if (!process.env.ALERTS_TOPIC || !process.env.SUBSCRIBERS_TABLE) return reply(503, { error: 'not_configured', message: 'Email alerts are not set up on this server.' });
+    const body = parseBody(event);
+    const coords = parseCoords(body?.lat, body?.lon);
+    if (!body || !coords) return reply(400, { error: 'invalid_request', message: 'Provide an email and valid lat/lon.' });
+    try {
+      const result = await subscribe(alertsEnv(), body, coords);
+      metric('AlertSubscribe', 1, 'Count', { Status: String(result.status) });
+      return reply(result.status, result.body);
+    } catch (error) { console.error('Subscribe failed', error.name, error.message); return unavailable(); }
+  }
+
   if (method !== 'GET') return reply(404, { error: 'not_found' });
+
+  if (path.endsWith('/route')) {
+    const parse = v => { const [lat, lon] = String(v || '').split(','); return parseCoords(lat, lon); };
+    const from = parse(query.from), to = parse(query.to);
+    if (!from || !to) return reply(400, { error: 'invalid_coordinates', message: 'Provide from and to as lat,lon.' });
+    const km = haversineKm(from, to);
+    if (km < 0.5 || km > MAX_TRIP_KM) return reply(400, { error: 'invalid_distance', message: `Trips must be between 0.5 and ${MAX_TRIP_KM} km apart.` });
+    try {
+      const trip = await cached('route', `route:v1:${from.latitude}:${from.longitude}:${to.latitude}:${to.longitude}`, 1800, async () => {
+        const fires = await Promise.race([getFires(1), new Promise(resolve => setTimeout(resolve, 4000, null).unref())]).catch(() => null);
+        return planTrip(from, to, fires?.state === 'available' ? fires.points : null);
+      }, true);
+      return reply(200, trip, { 'cache-control': 'public, max-age=900' });
+    } catch (error) {
+      console.error('Route failed', error.message);
+      // OSRM answers 400 / NoRoute across water or outside its road graph.
+      if (/OSRM|returned 400/.test(error.message)) return reply(200, { state: 'no_route', message: 'No driving route found between these places.' });
+      return unavailable();
+    }
+  }
 
   if (path.endsWith('/geocode')) {
     const q = String(query.q || '').trim();
@@ -342,6 +381,14 @@ async function route(event) {
     return unavailable();
   }
 }
+
+// EventBridge Scheduler entry point (AlertsFunction): one pass over every subscriber.
+export const alerts = async () => {
+  const stats = await runHourly(alertsEnv());
+  for (const [name, value] of Object.entries(stats)) metric(`Alerts_${name}`, value, 'Count', { Service: 'saans-alerts' });
+  console.log(JSON.stringify({ alerts: stats }));
+  return stats;
+};
 
 // Manual Powertools pattern: annotations need a subsegment because the Lambda facade segment is read-only.
 export const handler = async event => {

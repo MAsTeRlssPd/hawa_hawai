@@ -78,14 +78,18 @@ const HEALTH_UI = {
     doseTitle: 'If you breathe this air', cig: n => `≈ ${n} cigarette${n === '1' ? '' : 's'}`, cigBody: pm => `Breathing ${pm} µg/m³ of PM2.5 for 24 hours is roughly like smoking that many cigarettes (Berkeley Earth rule of thumb).`,
     air: v => `~${v} m³ of air a day`, airBody: (persona, dose) => `${persona}: at today’s level that is about ${dose} µg of PM2.5 inhaled. Children breathe more air per kg of body weight than adults.`,
     years: y => `${y} years`, yearsBody: 'Life expectancy lost if today’s PM2.5 lasted all year, compared with the WHO guideline of 5 µg/m³ (AQLI method). One bad day does not do this; years of exposure do.',
-    note: 'Educational, not medical advice. If you have trouble breathing, chest pain or feel faint, seek medical care.', sources: 'Sources' },
+    note: 'Educational, not medical advice. If you have trouble breathing, chest pain or feel faint, seek medical care.', sources: 'Sources',
+    allFine: 'Every pollutant is satisfactory or better right now. Here is the highest one, so you know what to watch.',
+    onlyHigh: n => `Showing only the ${n === 1 ? 'pollutant' : `${n} pollutants`} at moderate or worse right now, worst first.` },
   hi: { kicker: 'आपके फेफड़ों के अंदर · लाइव सिमुलेशन', title: 'आज की हवा कहाँ तक पहुँचती है', sim: 'ज़्यादा बिंदु = अभी ज़्यादा स्तर। चमकते हिस्से वे हैं जहाँ यह प्रदूषक नुकसान करता है।',
     where: 'कहाँ पहुँचता है', shortT: 'घंटों से दिनों में', longT: 'महीनों और सालों के संपर्क से', helps: 'क्या मदद करता है', now: 'अभी', who: (x, g, note) => `WHO ${note === '8h' ? '8-घंटे' : '24-घंटे'} सीमा (${g}) का ${x} गुना`, underWho: 'WHO सीमा के भीतर',
     forYou: (persona, name) => `${persona} होने के कारण आप ${name} के लिए ज़्यादा जोखिम वाले समूह में हैं।`, noData: 'लाइव स्तर उपलब्ध नहीं', inset: 'वायुकोष + केशिका',
     doseTitle: 'अगर आप यह हवा साँस में लेते हैं', cig: n => `≈ ${n} सिगरेट`, cigBody: pm => `24 घंटे ${pm} µg/m³ PM2.5 में साँस लेना लगभग इतनी सिगरेट पीने जैसा है (Berkeley Earth का अनुमान)।`,
     air: v => `रोज़ ~${v} m³ हवा`, airBody: (persona, dose) => `${persona}: आज के स्तर पर लगभग ${dose} µg PM2.5 साँस के साथ अंदर जाता है। बच्चे शरीर के वज़न के हिसाब से वयस्कों से ज़्यादा हवा लेते हैं।`,
     years: y => `${y} वर्ष`, yearsBody: 'अगर आज जैसा PM2.5 पूरे साल रहे तो WHO सीमा (5 µg/m³) की तुलना में घटने वाली औसत उम्र (AQLI पद्धति)। एक ख़राब दिन से नहीं, सालों के संपर्क से।',
-    note: 'शैक्षिक जानकारी, चिकित्सकीय सलाह नहीं। साँस लेने में तकलीफ़, सीने में दर्द या चक्कर हो तो तुरंत डॉक्टर से मिलें।', sources: 'स्रोत' }
+    note: 'शैक्षिक जानकारी, चिकित्सकीय सलाह नहीं। साँस लेने में तकलीफ़, सीने में दर्द या चक्कर हो तो तुरंत डॉक्टर से मिलें।', sources: 'स्रोत',
+    allFine: 'अभी हर प्रदूषक संतोषजनक या बेहतर है। सबसे ऊँचा वाला दिखा रहे हैं ताकि आप उस पर नज़र रख सकें।',
+    onlyHigh: n => `अभी मध्यम या उससे ख़राब स्तर वाले ${n} प्रदूषक दिखा रहे हैं, सबसे ख़राब पहले।` }
 };
 
 let healthPollutant = 'pm2_5';
@@ -161,13 +165,26 @@ function lungSvg(key, levelIndex, lang) {
   </svg>`;
 }
 
+// Pollutants worth explaining right now: AQI sub-index above 100 (Moderate or worse) or a moderate+ hourly level, worst first.
+// When everything is fine, the single highest one is shown with a reassuring note.
+function elevatedPollutants() {
+  const subs = lastData?.aqi?.subIndices || {};
+  const levels = Object.fromEntries((lastData?.pollutants || []).map(p => [p.key, p.level.index]));
+  const score = key => subs[key] ?? (key in levels ? levels[key] * 50 + 25 : -1);
+  const ranked = Object.keys(HEALTH).filter(k => score(k) >= 0).sort((a, b) => score(b) - score(a));
+  const up = ranked.filter(k => score(k) > 100 || levels[k] >= 2);
+  return { keys: up.length ? up : ranked.length ? ranked.slice(0, 1) : ['pm2_5'], allFine: !up.length };
+}
+
 function renderHealth() {
   const root = document.getElementById('health');
   if (!root) return;
+  const { keys, allFine } = elevatedPollutants();
+  if (!keys.includes(healthPollutant)) healthPollutant = keys[0];
   const lang = langKey(), t = HEALTH_UI[lang], copy = HEALTH[healthPollutant];
   const live = Object.fromEntries((lastData?.pollutants || []).map(p => [p.key, p]));
   const p = live[healthPollutant];
-  const tabs = Object.keys(HEALTH).map(key => {
+  const tabs = keys.map(key => {
     const lp = live[key];
     return `<button type="button" role="tab" aria-selected="${key === healthPollutant}" class="lung-tab${key === healthPollutant ? ' active' : ''}" data-key="${key}" style="--dot:${HEALTH[key].color}"><i></i><b>${HEALTH_NAMES[key]}</b>${lp ? `<small style="color:${lp.level.color}">${lp.value} ${safeText(lp.unit)}</small>` : ''}</button>`;
   }).join('');
@@ -184,6 +201,7 @@ function renderHealth() {
       <div class="dose-tile"><span class="dose-icon">⏳</span><b>${t.years((Math.max(0, pm - 5) * 0.098).toFixed(1))}</b><p>${safeText(t.yearsBody)}</p></div></div>` : '';
   root.querySelector('.health-body').innerHTML = `<div class="health-grid">
     <article class="card lung-card"><span class="section-kicker">${t.kicker}</span><h3>${t.title}</h3>
+      <p class="lung-why">${allFine ? t.allFine : t.onlyHigh(keys.length)}</p>
       <div class="lung-tabs" role="tablist">${tabs}</div>
       <div class="lung-stage">${lungSvg(healthPollutant, p?.level.index ?? 2, lang)}</div><small class="lung-note">${t.sim}</small></article>
     <article class="card harm-card"><div class="harm-head"><h3>${HEALTH_NAMES[healthPollutant]}</h3>${p ? `<span class="band-pill" style="--band:${p.level.color}"><i></i>${t.now}: ${p.value} ${safeText(p.unit)} · ${safeText(p.level.label[lang])}</span>` : `<span class="band-pill"><i></i>${t.noData}</span>`}</div>
@@ -191,8 +209,8 @@ function renderHealth() {
       ${mine ? `<p class="harm-you">${PERSONAS[selectedProfile].icon} ${safeText(t.forYou(persona, HEALTH_NAMES[healthPollutant]))}</p>` : ''}
       <h4>${t.where}</h4><p>${safeText(copy[lang].where)}</p>
       <div class="harm-cols"><div><h4>⚡ ${t.shortT}</h4>${list(copy[lang].short)}</div><div class="harm-long"><h4>⏳ ${t.longT}</h4>${list(copy[lang].long)}</div></div>
-      <h4>${t.helps}</h4><p>${safeText(copy[lang].helps)}</p></article></div>
-    ${dose ? `<h3 class="dose-title">${t.doseTitle}</h3>${dose}` : ''}
+      <h4>${t.helps}</h4><p>${safeText(copy[lang].helps)}</p></article></div>`;
+  root.querySelector('.health-dose').innerHTML = `${dose ? `<h3 class="dose-title">${t.doseTitle}</h3>${dose}` : ''}
     <small class="health-note">${t.note} ${t.sources}: <a href="https://www.who.int/publications/i/item/9789240034228" target="_blank" rel="noreferrer">WHO 2021 ↗</a> <a href="https://www.epa.gov/pm-pollution/health-and-environmental-effects-particulate-matter-pm" target="_blank" rel="noreferrer">US EPA ↗</a> <a href="https://aqli.epic.uchicago.edu/" target="_blank" rel="noreferrer">AQLI ↗</a> <a href="https://berkeleyearth.org/air-pollution-and-cigarette-equivalence/" target="_blank" rel="noreferrer">Berkeley Earth ↗</a></small>`;
   root.querySelectorAll('.lung-tab').forEach(button => button.addEventListener('click', () => { healthPollutant = button.dataset.key; renderHealth(); }));
 }

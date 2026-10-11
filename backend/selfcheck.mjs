@@ -2,7 +2,9 @@
 import assert from 'node:assert/strict';
 import { bandFor, actionsFor, compass, pollutantsFor, PROFILES, CONDITIONS, subIndex, aqiBandFor, aqiSeries } from './src/guidance.mjs';
 import { flagOutliers, makeEstimate } from './src/handler.mjs';
-import { ruleAnswer, chatTurns, findAnomalies, anomalyNote } from './src/assistant.mjs';
+import { ruleAnswer, chatTurns, findAnomalies, anomalyNote, cleanAbout } from './src/assistant.mjs';
+import { samplePath, scoreTrip, firesNear } from './src/routes.mjs';
+import { validEmail, subscriberId, shouldSend, alertMessage } from './src/alerts.mjs';
 import { ventilation, parseFiresCsv, recentFires,stateOf, summariseFires, upwindFires, bearing, backtest, pearson, historyCsv, parseGeocode } from './src/sources.mjs';
 
 assert.deepEqual([0, 30, 30.1, 60, 90, 120, 250, 251].map(pm => bandFor(pm).key), ['good', 'good', 'satisfactory', 'satisfactory', 'moderate', 'poor', 'very_poor', 'severe']);
@@ -92,4 +94,33 @@ assert.match(ruleAnswer('Should I go for a run?', air, { profile: 'older', lang:
 assert.match(ruleAnswer('मास्क?', air, { profile: 'general', lang: 'hi', place: 'Delhi' }), /N95/);
 assert.match(ruleAnswer('Is stubble smoke coming?', air, { profile: 'general', lang: 'en', place: 'Delhi' }), /12 fires upwind.*Punjab/);
 assert.match(ruleAnswer('Why is the air so bad today?', air, { profile: 'general', lang: 'en', place: 'Delhi' }), /trapped/);
+// Onboarding answers: whitelist only, and they personalise the indoor answer
+assert.deepEqual(cleanAbout({ age: 'senior', work: 'hacker', floor: 'ground', near: ['road', 'moon'], smoker: true, purifier: 'yes' }), { age: 'senior', floor: 'ground', near: ['road'], smoker: true });
+assert.equal(cleanAbout('x'), null);
+assert.match(ruleAnswer('How do I keep my home air clean?', air, { profile: 'general', lang: 'en', place: 'Delhi', about: { fuel: 'solid', near: ['road'], floor: 'low' } }), /wood, coal.*low floor near a main road/);
+assert.ok(CONDITIONS.includes('eye') && CONDITIONS.includes('sinus'));
+
+// Trip planner: even samples by distance, departure scoring, fires near the path
+const line = samplePath([[77, 28], [77, 28.5], [77, 29]], 3);
+assert.deepEqual(line.map(p => p.lat), [28, 28.5, 29]);
+assert.ok(Math.abs(line[2].km - 111.2) < 1);
+const trip = [{ minute: 0, pm: [100, 40], vis: [1500, 9000] }, { minute: 70, pm: [100, 80, 20], vis: [9000, 9000, 9000] }];
+assert.deepEqual(scoreTrip(trip, 0, 10), { avgPm: 90, maxPm: 100, minVisKm: 1.5, hazyKm: 10 }); // second point is reached an hour later
+assert.deepEqual(scoreTrip(trip, 1, 10), { avgPm: 30, maxPm: 40, minVisKm: 9, hazyKm: 0 });
+assert.equal(firesNear(line, [[28.5, 77.05, 5], [28.5, 77.5, 5], [20, 70, 5]]), 1);
+
+// Alerts: email check, stable id, quiet hours, "changes" only on a band move, ASCII subject
+assert.ok(validEmail('a.b@example.in') && !validEmail('nope@x') && !validEmail('a b@c.de'));
+assert.equal(subscriberId(' A@B.com '), subscriberId('a@b.com'));
+const alertAir = { location: { timezone: 'Asia/Kolkata' }, aqi: { value: 212, band: aqiBandFor(212), dominantName: 'PM2.5' }, estimate: { pm2_5: 95 },
+  forecast: [212, 215, 220, 230, 200, 180].map((aqi, i) => ({ time: `2026-10-11T${String(14 + i).padStart(2, '0')}:00`, aqi })), fires: { state: 'available', count: 7 } };
+const noon = new Date('2026-10-11T07:00:00Z'), night = new Date('2026-10-11T19:00:00Z'); // 12:30 and 00:30 IST
+assert.equal(shouldSend({ freq: 'hourly', lastBand: 3 }, alertAir, noon), true);
+assert.equal(shouldSend({ freq: 'changes', lastBand: 3 }, alertAir, noon), false);
+assert.equal(shouldSend({ freq: 'changes', lastBand: 2 }, alertAir, noon), true);
+assert.equal(shouldSend({ freq: 'hourly', lastBand: 2 }, alertAir, night), false); // poor is not urgent enough to wake anyone
+const msg = alertMessage({ place: 'Lajpat Nagar, दिल्ली', profile: 'children', conditions: ['asthma'] }, alertAir);
+assert.equal(msg.subject, 'Saans: AQI 212 Poor in Lajpat Nagar,');
+assert.match(msg.text, /Getting worse.*\n.*Cleanest stretch.*19:00 \(AQI ~180\)[\s\S]*inhaler[\s\S]*7 farm or forest fires/);
+assert.match(alertMessage({ lang: 'hi' }, alertAir).text, /क्या करें/);
 console.log('selfcheck ok');

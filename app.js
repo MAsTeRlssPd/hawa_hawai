@@ -6,7 +6,6 @@ const API_BASE = (window.SAANS_API_BASE || '').replace(/\/$/, '');
 const aqiEl = document.getElementById('aqiValue');
 const rangeEl = document.getElementById('aqiRange');
 const statusEl = document.querySelector('.live-pill');
-const stationList = document.querySelector('.station-list');
 const response = document.getElementById('chatResponse');
 // Personas must match PROFILES in backend/src/guidance.mjs.
 const PERSONAS = {
@@ -25,10 +24,22 @@ const CONDITIONS = {
   asthma: { icon: '🫁', en: 'Asthma', hi: 'अस्थमा', pollutants: ['pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone', 'sulphur_dioxide'] },
   copd: { icon: '🌬️', en: 'COPD / chronic bronchitis', hi: 'COPD / पुरानी ब्रोंकाइटिस', pollutants: ['pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone', 'sulphur_dioxide'] },
   allergy: { icon: '🤧', en: 'Dust or pollen allergy', hi: 'धूल या पराग से एलर्जी', pollutants: ['pm10', 'pm2_5', 'ozone'] },
+  eye: { icon: '👁️', en: 'Eye irritation or eye allergy', hi: 'आँखों में जलन या एलर्जी', pollutants: ['ozone', 'pm10', 'nitrogen_dioxide', 'pm2_5'] },
+  sinus: { icon: '👃', en: 'Sinusitis or blocked nose', hi: 'साइनस या बंद नाक', pollutants: ['pm10', 'pm2_5', 'sulphur_dioxide'] },
   heart: { icon: '🫀', en: 'Heart disease or high BP', hi: 'हृदय रोग या हाई BP', pollutants: ['pm2_5', 'carbon_monoxide', 'nitrogen_dioxide'] },
   diabetes: { icon: '🩸', en: 'Diabetes', hi: 'डायबिटीज़', pollutants: ['pm2_5', 'nitrogen_dioxide'] }
 };
-const PAGE_IDS = ['today', 'overview', 'airspace', 'health', 'area-watch', 'more'];
+// Pages and their nav entries; each mode shows a subset. [id, icon, en, hi, short en, short hi]
+const NAV = [['today', '◎', 'Today', 'आज'], ['overview', '⌂', 'Overview', 'सारांश'], ['airspace', '◉', 'Airspace', 'वायु क्षेत्र', 'Air', 'वायु'],
+  ['health', '✚', 'Health & guidance', 'सेहत और सलाह', 'Health', 'सेहत'], ['trip', '➶', 'Trip planner', 'यात्रा योजना', 'Trip', 'यात्रा'],
+  ['challenge', '★', 'Daily challenge', 'आज की चुनौती', 'Quiz', 'क्विज़'], ['area-watch', '⌁', 'Area watch', 'क्षेत्र पर नज़र', 'Area', 'क्षेत्र'], ['more', '···', 'More', 'और']];
+const PAGE_IDS = NAV.map(n => n[0]);
+const MODES = { citizen: ['today', 'overview', 'airspace', 'health', 'trip', 'challenge', 'more'], gov: ['overview', 'area-watch', 'more'] };
+let appMode = 'citizen';
+try { if (localStorage.getItem('saans-mode') in MODES) appMode = localStorage.getItem('saans-mode'); } catch { /* default mode */ }
+// Onboarding answers (age, work, home...) that personalise alerts, indoor tips and Ask Saans. Whitelisted again by the API.
+let aboutMe = {};
+try { aboutMe = JSON.parse(localStorage.getItem('saans-about')) || {}; } catch { /* not asked yet */ }
 let selectedLocation = DEFAULT_LOCATION;
 let deferredInstallPrompt;
 let lastData = null;
@@ -46,10 +57,21 @@ const UI = {
     editProfile: 'Change persona or conditions', condTag: label => `Your condition · ${label}`,
     aqiCircle: 'AQI · indicative', aqiMostly: name => `Mostly ${name}`, aqiNote: 'Indicative AQI (CPCB method on model data), not the official CPCB AQI.', outlookL: h => `In ${h} h`,
     tipAt: (t, pm, aqi) => `<b>${t}</b>PM2.5 ${pm} µg/m³${aqi == null ? '' : ` · AQI ${aqi}`}`, spike: 'Spike', dip: 'Dip', explainTitle: 'Why the line jumps', explainLoading: 'Looking for unusual hours…', explainNone: 'No unusual spikes or dips in this period.', viaBedrockShort: 'Explained by Amazon Bedrock', viaRulesShort: 'Explained from weather data',
-    legendTitle: 'What the colours mean', legendCols: ['Band', 'PM2.5 µg/m³', 'AQI'], legendMove: 'Moving from green towards maroon, the air affects more people, sooner: first those with asthma, heart disease, children and older adults, then everyone after long exposure, and at Severe even healthy people within hours.', legendPins: 'Grey pin = outlier, excluded · faded pin = stale reading · ⌂ = you',
     indoorKicker: 'INDOOR AIR', indoorTitle: 'Cleaner air at home', indoorIntro: pm => `Outdoor PM2.5 is ~${pm} µg/m³. With windows shut, part of it still leaks in, so indoor air is rarely much cleaner without a filter.`,
     wardKicker: 'DELHI WARD FORECAST · GRAPH NEURAL NETWORK', wardTitle: name => `AQI outlook for ${name}`, wardBody: km => `Nearest of 289 wards (~${km} km). Range = 80% conformal interval.`, wardNote: 'WardGraphTransformer trained on CPCB stations (mansi724/PROJECT-AQI), run hourly on CAMS + weather.',
     newChat: 'New chat',
+    modes: { citizen: 'Citizen', gov: 'Government' }, modeLabel: 'View',
+    stTitle: 'Monitors around you', stSub: 'Tap a monitor to zoom to it. The number on each pin matches the list.', stNearest: 'Nearest', stAvg: 'Recent average', stFresh: 'Reporting now',
+    stEmpty: 'No PM2.5 monitors reported within 25 km in the past week, so Saans uses the CAMS model here.',
+    homeRoad: 'You live near a main road or gate: keep road-facing windows shut in the morning and evening rush.', homeConstruction: 'A construction site near home adds dust (PM10): wet-mop daily and keep that side closed.',
+    homeIndustry: 'An industrial area nearby can add SO₂ and NO₂: keep windows on that side shut when the air is poor.', homeBurning: 'Garbage burning nearby spikes smoke, mostly in the evening: shut windows then and report it to your municipality.',
+    homeFloor: 'On a ground or low floor near traffic, street-level smoke and dust reach you first.', outsideLong: h => `You spend ${h} outdoors: take breaks indoors and drink water; a well-fitted N95 helps on long shifts.`,
+    fuelTip: 'Cooking on wood, coal or kerosene is usually the biggest source of smoke at home: cook with a window and door open, or switch to LPG when you can.',
+    smokerTip: 'Smoking indoors raises PM2.5 more than most bad outdoor days: smoke outside, away from children.', purifierTip: 'You have an air purifier: run it in the bedroom with the door shut, and change the filter on time.',
+    outsideHours: { lt1: 'under an hour', '1to3': '1–3 hours', '3to6': '3–6 hours a day', gt6: 'over 6 hours a day' },
+    hotKicker: 'DELHI WARDS · GNN FORECAST', hotTitle: 'Ward hotspots in the next 24 hours', hotBody: 'Wards with the highest forecast AQI, to prioritise inspections, water sprinkling and construction checks.',
+    alertsTitle: 'Hourly email alerts', alertsBody: 'Get your AQI, the cleanest hours and what to do, by email every hour (quiet 10 pm–7 am unless the air turns very poor).',
+    alertsEmail: 'Email address', alertsHourly: 'Every hour', alertsChanges: 'Only when the level changes', alertsSend: 'Start alerts', alertsSent: 'Almost done: open the email from AWS Notifications and click “Confirm subscription”.', alertsFail: 'Could not set up alerts right now.',
     notMedical: 'Not medical advice', noEstimate: 'Guidance appears once a PM2.5 estimate is available.',
     windKicker: 'LIVE WIND · OPEN-METEO', windTitle: 'Where your air is coming from', windFrom: dir => `Air is arriving from the ${dir}`, gusts: 'gusts', next24: 'Next 24 hours',
     ncrSmoke: 'Winds from the north-west can carry stubble smoke from Punjab and Haryana in Oct–Nov. Check hotspots before assuming smoke is the cause.', ncrClear: 'Current winds are not from the Punjab–Haryana direction.', windUnavailable: 'Live wind data is unavailable right now.',
@@ -80,15 +102,28 @@ const UI = {
       airspace: { kicker: 'THE NETWORK', title: () => 'Airspace', desc: 'Nearby monitors, how fresh they are, and where they sit around you.' },
       health: { kicker: 'YOUR BODY AND THIS AIR', title: () => 'Health & guidance', desc: 'What to do today for you and any condition, how to keep indoor air cleaner, and where each pollutant lands in your lungs.' },
       'area-watch': { kicker: 'BEYOND YOUR STREET', title: () => 'Area watch', desc: 'Live wind, how well the air is mixing, and NASA fire hotspots that could send smoke your way.' },
+      trip: { kicker: 'BEFORE YOU SET OUT', title: () => 'Trip planner', desc: 'Compare driving routes by haze, smog and visibility, and find the cleanest time to leave.' },
+      challenge: { kicker: 'ONE QUESTION A DAY', title: () => 'Daily challenge', desc: 'Learn something about the air every day and keep your streak going.' },
       more: { kicker: 'YOUR SAANS', title: () => 'More', desc: 'Keep the essentials close and your preferences yours.' } } },
   hi: { bandSuffix: 'CPCB PM2.5 श्रेणी · संकेतात्मक', guidanceKicker: 'आज के लिए सलाह', forWho: 'क्या करें', cpcbSays: 'CPCB के अनुसार स्वास्थ्य प्रभाव', cleanest: 'अगले 24 घंटों में सबसे साफ़ समय (मॉडल)',
     editProfile: 'व्यक्ति या बीमारी बदलें', condTag: label => `आपकी स्थिति · ${label}`,
     aqiCircle: 'AQI · संकेतात्मक', aqiMostly: name => `मुख्यतः ${name}`, aqiNote: 'संकेतात्मक AQI (मॉडल डेटा पर CPCB तरीका), आधिकारिक CPCB AQI नहीं।', outlookL: h => `${h} घंटे में`,
     tipAt: (t, pm, aqi) => `<b>${t}</b>PM2.5 ${pm} µg/m³${aqi == null ? '' : ` · AQI ${aqi}`}`, spike: 'उछाल', dip: 'गिरावट', explainTitle: 'रेखा क्यों उछलती है', explainLoading: 'असामान्य घंटे खोज रहे हैं…', explainNone: 'इस अवधि में कोई असामान्य उछाल या गिरावट नहीं।', viaBedrockShort: 'Amazon Bedrock द्वारा व्याख्या', viaRulesShort: 'मौसम डेटा से व्याख्या',
-    legendTitle: 'रंगों का मतलब', legendCols: ['श्रेणी', 'PM2.5 µg/m³', 'AQI'], legendMove: 'हरे से गहरे लाल की ओर बढ़ने पर हवा ज़्यादा लोगों पर और जल्दी असर करती है: पहले अस्थमा, हृदय रोगी, बच्चे और बुज़ुर्ग, फिर लंबे संपर्क में सभी, और गंभीर स्तर पर स्वस्थ लोग भी कुछ घंटों में।', legendPins: 'धूसर पिन = असामान्य, हटाया · हल्का पिन = पुरानी रीडिंग · ⌂ = आप',
     indoorKicker: 'घर के अंदर की हवा', indoorTitle: 'घर में साफ़ हवा', indoorIntro: pm => `बाहर PM2.5 ~${pm} µg/m³ है। खिड़कियाँ बंद होने पर भी इसका कुछ हिस्सा अंदर आता है, इसलिए फ़िल्टर के बिना अंदर की हवा ज़्यादा साफ़ नहीं होती।`,
     wardKicker: 'दिल्ली वार्ड पूर्वानुमान · ग्राफ़ न्यूरल नेटवर्क', wardTitle: name => `${name} के लिए AQI अनुमान`, wardBody: km => `289 वार्डों में सबसे पास (~${km} km)। सीमा = 80% कॉन्फ़ॉर्मल अंतराल।`, wardNote: 'CPCB स्टेशनों पर प्रशिक्षित WardGraphTransformer (mansi724/PROJECT-AQI), हर घंटे CAMS + मौसम पर चलता है।',
     newChat: 'नई बातचीत',
+    modes: { citizen: 'नागरिक', gov: 'सरकार' }, modeLabel: 'दृश्य',
+    stTitle: 'आपके आसपास के मॉनिटर', stSub: 'किसी मॉनिटर पर टैप करें, नक्शा वहाँ ज़ूम होगा। पिन का नंबर सूची से मेल खाता है।', stNearest: 'सबसे पास', stAvg: 'हाल का औसत', stFresh: 'अभी रिपोर्ट कर रहे',
+    stEmpty: 'पिछले हफ़्ते 25 km के भीतर किसी PM2.5 मॉनिटर ने रिपोर्ट नहीं किया, इसलिए यहाँ CAMS मॉडल का उपयोग होता है।',
+    homeRoad: 'आप मुख्य सड़क या गेट के पास रहते हैं: सुबह-शाम के ट्रैफ़िक में सड़क की ओर की खिड़कियाँ बंद रखें।', homeConstruction: 'घर के पास निर्माण से धूल (PM10) बढ़ती है: रोज़ गीला पोछा लगाएँ और उस ओर की खिड़कियाँ बंद रखें।',
+    homeIndustry: 'पास के औद्योगिक इलाक़े से SO₂ और NO₂ आ सकती है: हवा ख़राब हो तो उस ओर की खिड़कियाँ बंद रखें।', homeBurning: 'पास में कूड़ा जलने से धुआँ बढ़ता है, ज़्यादातर शाम को: तब खिड़कियाँ बंद रखें और नगर निगम को सूचित करें।',
+    homeFloor: 'ट्रैफ़िक के पास निचली मंज़िल पर सड़क का धुआँ और धूल सबसे पहले पहुँचते हैं।', outsideLong: h => `आप ${h} बाहर रहते हैं: बीच-बीच में अंदर आराम करें और पानी पिएँ; लंबी शिफ़्ट में अच्छी तरह फिट N95 मदद करता है।`,
+    fuelTip: 'लकड़ी, कोयले या केरोसिन पर खाना बनाना अक्सर घर में धुएँ का सबसे बड़ा स्रोत होता है: खिड़की-दरवाज़ा खोलकर पकाएँ या जब हो सके LPG अपनाएँ।',
+    smokerTip: 'घर में धूम्रपान ज़्यादातर ख़राब दिनों से भी ज़्यादा PM2.5 बढ़ाता है: बाहर और बच्चों से दूर पिएँ।', purifierTip: 'आपके पास प्यूरीफ़ायर है: उसे सोने के कमरे में दरवाज़ा बंद करके चलाएँ और फ़िल्टर समय पर बदलें।',
+    outsideHours: { lt1: 'एक घंटे से कम', '1to3': '1–3 घंटे', '3to6': 'रोज़ 3–6 घंटे', gt6: 'रोज़ 6 घंटे से ज़्यादा' },
+    hotKicker: 'दिल्ली वार्ड · GNN पूर्वानुमान', hotTitle: 'अगले 24 घंटों में वार्ड हॉटस्पॉट', hotBody: 'सबसे ज़्यादा अनुमानित AQI वाले वार्ड, ताकि निरीक्षण, पानी छिड़काव और निर्माण जाँच को प्राथमिकता दी जा सके।',
+    alertsTitle: 'हर घंटे ईमेल अलर्ट', alertsBody: 'हर घंटे ईमेल पर अपना AQI, सबसे साफ़ समय और क्या करें पाएँ (रात 10 से सुबह 7 बजे तक बंद, जब तक हवा बहुत ख़राब न हो)।',
+    alertsEmail: 'ईमेल पता', alertsHourly: 'हर घंटे', alertsChanges: 'सिर्फ़ स्तर बदलने पर', alertsSend: 'अलर्ट शुरू करें', alertsSent: 'लगभग हो गया: AWS Notifications का ईमेल खोलें और “Confirm subscription” पर क्लिक करें।', alertsFail: 'अभी अलर्ट सेट नहीं हो सके।',
     notMedical: 'चिकित्सकीय सलाह नहीं', noEstimate: 'PM2.5 अनुमान मिलने पर सलाह दिखेगी।',
     windKicker: 'लाइव हवा · OPEN-METEO', windTitle: 'आपकी हवा कहाँ से आ रही है', windFrom: dir => `हवा ${dir} दिशा से आ रही है`, gusts: 'झोंके', next24: 'अगले 24 घंटे',
     ncrSmoke: 'अक्टूबर–नवंबर में उत्तर-पश्चिमी हवाएँ पंजाब और हरियाणा से पराली का धुआँ ला सकती हैं।', ncrClear: 'अभी हवा पंजाब–हरियाणा की दिशा से नहीं आ रही है।', windUnavailable: 'लाइव हवा का डेटा अभी उपलब्ध नहीं है।',
@@ -119,6 +154,8 @@ const UI = {
       airspace: { kicker: 'नेटवर्क', title: () => 'वायु क्षेत्र', desc: 'आसपास के मॉनिटर, उनका डेटा कितना ताज़ा है, और वे कहाँ हैं।' },
       health: { kicker: 'आपका शरीर और यह हवा', title: () => 'सेहत और सलाह', desc: 'आज आपके और आपकी बीमारी के लिए क्या करें, घर की हवा कैसे साफ़ रखें, और हर प्रदूषक फेफड़ों में कहाँ पहुँचता है।' },
       'area-watch': { kicker: 'आपकी गली से आगे', title: () => 'क्षेत्र पर नज़र', desc: 'लाइव हवा, हवा कितनी मिल रही है, और NASA के आग वाले स्थान जिनका धुआँ आप तक आ सकता है।' },
+      trip: { kicker: 'निकलने से पहले', title: () => 'यात्रा योजना', desc: 'रास्तों की धुंध, स्मॉग और दृश्यता की तुलना करें, और निकलने का सबसे साफ़ समय जानें।' },
+      challenge: { kicker: 'रोज़ एक सवाल', title: () => 'आज की चुनौती', desc: 'हर दिन हवा के बारे में कुछ नया सीखें और अपनी स्ट्रीक बनाए रखें।' },
       more: { kicker: 'आपका SAANS', title: () => 'और', desc: 'ज़रूरी चीज़ें पास रखें, अपनी पसंद अपनी रखें।' } } }
 };
 const ui = () => UI[currentLanguage] || UI.en;
@@ -154,7 +191,6 @@ function buildPages() {
   const wardCard = document.createElement('article');
   wardCard.className = 'card ward-card';
   wardCard.hidden = true;
-  map.append(Object.assign(document.createElement('div'), { className: 'band-legend' }));
   const windCard = document.createElement('article');
   windCard.className = 'card wind-card';
   const fireCard = document.createElement('article');
@@ -165,12 +201,25 @@ function buildPages() {
   historyCard.className = 'card history-card';
   historyCard.addEventListener('click', event => { const button = event.target.closest('[data-days]'); if (button) { historyDays = Number(button.dataset.days); historyCard.dataset.key = ''; loadHistory(); } });
 
+  const hotCard = document.createElement('article');
+  hotCard.className = 'card hot-card';
+  hotCard.hidden = true;
+  stations.addEventListener('click', event => { const row = event.target.closest('[data-st]'); if (row) focusStation(Number(row.dataset.st)); });
+
   grid.append(
     today,
-    page('overview', div('air-primary', air, forecast), wardCard, historyCard),
-    page('airspace', div('air-secondary', map, stations)),
-    page('health', div('guidance-grid', adviceCard, indoorCard), div('health-body')),
+    page('overview', div('air-primary', air, forecast), hotCard, wardCard, historyCard),
+    page('airspace', div('airspace-stage', map, stations)),
+    page('health', adviceCard, div('health-body'), indoorCard, div('health-dose')),
+    page('trip', div('trip-root')),
+    page('challenge', div('quiz-root')),
     page('area-watch', windCard, fireCard));
+  // Citizen / Government switch in the top bar.
+  const modeSwitch = document.createElement('div');
+  modeSwitch.className = 'seg mode-switch';
+  modeSwitch.setAttribute('role', 'group');
+  modeSwitch.addEventListener('click', event => { const b = event.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
+  document.querySelector('.top-actions').prepend(modeSwitch);
   const more = document.getElementById('more');
   more.classList.add('page');
   more.hidden = true;
@@ -202,17 +251,26 @@ function renderHeadings() {
     const copy = pages[id];
     document.querySelector(`#${id} > .group-heading`).innerHTML = `<div><span class="section-kicker">${copy.kicker}</span><h2>${safeText(copy.title(displayName()))}</h2></div><p>${copy.desc}</p>`;
   });
-  const labels = currentLanguage === 'hi' ? ['आज', 'सारांश', 'वायु क्षेत्र', 'सेहत और सलाह', 'क्षेत्र पर नज़र', 'और'] : ['Today', 'Overview', 'Airspace', 'Health & guidance', 'Area watch', 'More'];
-  document.querySelectorAll('.side-nav .nav-item').forEach((item, index) => { const icon = item.querySelector('.nav-icon')?.outerHTML || ''; item.innerHTML = `${icon} ${safeText(labels[index])}`; });
-  const mobile = currentLanguage === 'hi' ? ['आज', 'सारांश', 'वायु', 'सेहत', 'क्षेत्र', 'और'] : ['Today', 'Overview', 'Airspace', 'Health', 'Area', 'More'];
-  document.querySelectorAll('.mobile-nav a').forEach((item, index) => { const icon = item.querySelector('span')?.outerHTML || ''; item.innerHTML = `${icon}${mobile[index]}`; });
+  const hi = currentLanguage === 'hi';
+  const items = NAV.filter(n => MODES[appMode].includes(n[0]));
+  document.querySelector('.side-nav').innerHTML = items.map(([id, icon, en, hiLabel]) => `<a class="nav-item" href="#${id}"><span class="nav-icon">${icon}</span> ${safeText(hi ? hiLabel : en)}</a>`).join('');
+  document.querySelector('.mobile-nav').innerHTML = items.map(([id, icon, en, hiLabel, shortEn, shortHi]) => `<a href="#${id}"><span>${icon}</span>${safeText(hi ? shortHi || hiLabel : shortEn || en)}</a>`).join('');
+  document.querySelector('.mode-switch').innerHTML = `<span class="mode-label">${ui().modeLabel}</span>${Object.keys(MODES).map(m => `<button type="button" data-mode="${m}" class="${m === appMode ? 'on' : ''}" aria-pressed="${m === appMode}">${ui().modes[m]}</button>`).join('')}`;
+  document.body.dataset.mode = appMode;
   showPage(location.hash.slice(1), false);
+}
+
+function setMode(mode) {
+  appMode = mode in MODES ? mode : 'citizen';
+  try { localStorage.setItem('saans-mode', appMode); } catch { /* session only */ }
+  renderHeadings();
+  loadWard();
 }
 
 // One page at a time; the URL hash is the router so links, back button and refresh all work.
 function showPage(id, scroll = true) {
   if (id === 'guidance') { history.replaceState(null, '', '#health'); id = 'health'; } // old links
-  if (!PAGE_IDS.includes(id)) id = 'today';
+  if (!MODES[appMode].includes(id)) id = MODES[appMode][0];
   PAGE_IDS.forEach(pageId => { document.getElementById(pageId).hidden = pageId !== id; });
   document.querySelectorAll('.side-nav .nav-item').forEach(item => item.classList.toggle('active', item.getAttribute('href') === `#${id}`));
   document.querySelectorAll('.mobile-nav a').forEach(item => item.classList.toggle('mobile-active', item.getAttribute('href') === `#${id}`));
@@ -221,6 +279,8 @@ function showPage(id, scroll = true) {
   if (scroll) window.scrollTo(0, 0);
   refreshMaps();
   if (id === 'overview') loadHistory();
+  if (id === 'trip') renderTrip();
+  if (id === 'challenge') renderQuiz();
 }
 window.addEventListener('hashchange', () => showPage(location.hash.slice(1)));
 
@@ -255,43 +315,36 @@ function safeText(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 }
 
+// Airspace: a glass panel over the full-bleed map with a summary and one card per monitor, coloured by its CPCB band.
 function renderStations(stations = []) {
-  if (!stations.length) {
-    stationList.innerHTML = '<div class="empty-state">No OpenAQ PM2.5 monitors reported near this location in the past week. The forecast remains available from the model source.</div>';
-    document.querySelector('.station-count').textContent = 'NO RECENT READINGS';
-    document.querySelector('.station-foot > span').textContent = 'OpenAQ data unavailable or no nearby monitors';
-    return;
-  }
-  const copy = ui();
-  stationList.innerHTML = stations.map((station, index) => {
-    const stale = station.status !== 'reporting';
-    const freshness = station.ageMinutes < 60 ? `${station.ageMinutes}m ago` : station.ageMinutes < 2880 ? `${Math.floor(station.ageMinutes / 60)}h ago` : `${Math.floor(station.ageMinutes / 1440)}d ago`;
-    const state = station.flag ? 'outlier' : stale ? 'offline' : 'online';
-    const tag = station.flag ? copy.outlierTag : stale ? copy.stale : copy.recent;
-    return `<div class="station-row ${state}"><span class="station-status ${state}"></span><span class="station-name"><b><span class="station-num">${index + 1}</span> ${safeText(station.name)}</b><small>${station.distanceKm} km · ${safeText(freshness)} · OpenAQ</small></span><span class="station-aqi"><b>${Number(station.pm2_5).toFixed(1)}</b><small>µg/m³</small></span><span class="reliability"><small>${tag}</small></span></div>`;
-  }).join('');
-  const recent = stations.filter(s => s.status === 'reporting' && !s.flag).length;
-  const outliers = stations.filter(s => s.flag).length;
-  document.querySelector('.station-count').textContent = `${stations.length} STATION${stations.length === 1 ? '' : 'S'}`;
-  document.querySelector('.station-foot > span').innerHTML = `<span class="status-dot"></span> ${recent} recent · ${stations.length - recent - outliers} stale${outliers ? ` · ${outliers} outlier` : ''}`;
+  const copy = ui(), lang = langKey(), card = document.querySelector('.stations-card');
+  const head = `<span class="section-kicker">OPENAQ · PM2.5</span><h3>${copy.stTitle}</h3>`;
+  if (!stations.length) { card.innerHTML = `${head}<p class="st-empty">${copy.stEmpty}</p>`; return; }
+  const fresh = stations.filter(s => s.status === 'reporting' && !s.flag);
+  const avg = fresh.length ? fresh.reduce((a, s) => a + s.pm2_5, 0) / fresh.length : null;
+  const stat = (label, value, sub = '', color = '') => `<div class="st-stat"${color ? ` style="--c:${color}"` : ''}><small>${label}</small><b>${value}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  card.innerHTML = `${head}<p class="st-sub">${copy.stSub}</p>
+    <div class="st-stats">${stat(copy.stNearest, `${stations[0].distanceKm} km`, safeText(stations[0].name))}${avg == null ? '' : stat(copy.stAvg, `${Math.round(avg)} <small>µg/m³</small>`, bandOf(avg)[lang === 'hi' ? 3 : 2], bandOf(avg)[1])}${stat(copy.stFresh, `${fresh.length}/${stations.length}`)}</div>
+    <div class="station-list">${stations.map((st, index) => {
+      const stale = st.status !== 'reporting';
+      const freshness = st.ageMinutes < 60 ? `${st.ageMinutes}m` : st.ageMinutes < 2880 ? `${Math.floor(st.ageMinutes / 60)}h` : `${Math.floor(st.ageMinutes / 1440)}d`;
+      const band = bandOf(st.pm2_5);
+      const tag = st.flag ? copy.outlierTag : stale ? copy.stale : band[lang === 'hi' ? 3 : 2];
+      return `<button type="button" class="st-card${st.flag ? ' outlier' : stale ? ' stale' : ''}" data-st="${index}" style="--c:${st.flag ? '#8a8f8c' : band[1]}"><span class="st-num">${index + 1}</span><span class="st-name"><b>${safeText(st.name)}</b><small>${st.distanceKm} km · ${safeText(freshness)} ago</small></span><span class="st-pm"><b>${Math.round(st.pm2_5)}</b><small>${safeText(tag)}</small></span></button>`;
+    }).join('')}</div>`;
+}
+
+// Click on a monitor card: fly the map to it and open its popup.
+const stationMarkers = [];
+function focusStation(index) {
+  const marker = stationMarkers[index], m = maps.stations;
+  if (!marker || !m) return;
+  m.map.flyTo(marker.getLatLng(), Math.max(m.map.getZoom(), 14), { duration: .6 });
+  marker.openPopup();
 }
 
 const BANDS = [[30, '#3f9b6b', 'Good', 'अच्छा'], [60, '#8bb35a', 'Satisfactory', 'संतोषजनक'], [90, '#d9a93c', 'Moderate', 'मध्यम'], [120, '#d9793c', 'Poor', 'ख़राब'], [250, '#c2453a', 'Very poor', 'बहुत ख़राब'], [Infinity, '#7d2a3a', 'Severe', 'गंभीर']];
 const bandOf = pm => BANDS.find(b => pm <= b[0]) || BANDS.at(-1);
-// CPCB ranges and health impact per band, same order as BANDS.
-const BAND_INFO = [
-  ['0–30', '0–50', 'Minimal impact.', 'न्यूनतम प्रभाव।'],
-  ['31–60', '51–100', 'Minor breathing discomfort for sensitive people.', 'संवेदनशील लोगों को साँस में हल्की तकलीफ़।'],
-  ['61–90', '101–200', 'Discomfort for people with asthma or heart disease, children and older adults.', 'अस्थमा या हृदय रोगियों, बच्चों और बुज़ुर्गों को तकलीफ़।'],
-  ['91–120', '201–300', 'Breathing discomfort for most people on long exposure.', 'लंबे संपर्क में ज़्यादातर लोगों को साँस में तकलीफ़।'],
-  ['121–250', '301–400', 'Respiratory illness on long exposure; worse for lung and heart patients.', 'लंबे संपर्क से साँस की बीमारी; फेफड़े व हृदय रोगियों पर ज़्यादा असर।'],
-  ['250+', '401–500', 'Affects healthy people; serious for anyone already ill.', 'स्वस्थ लोगों पर भी असर; बीमार लोगों के लिए गंभीर।']];
-
-function renderBandLegend() {
-  const copy = ui(), hi = langKey() === 'hi';
-  const now = lastData?.guidance?.band.index;
-  document.querySelector('.band-legend').innerHTML = `<h3>${copy.legendTitle}</h3><div class="band-rows" role="table"><div class="band-row band-head" role="row">${copy.legendCols.map(c => `<span role="columnheader">${c}</span>`).join('')}<span></span></div>${BANDS.map((b, i) => `<div class="band-row${i === now ? ' now' : ''}" role="row"><span role="cell"><i style="--c:${b[1]}"></i><b>${b[hi ? 3 : 2]}</b></span><span role="cell">${BAND_INFO[i][0]}</span><span role="cell">${BAND_INFO[i][1]}</span><small role="cell">${BAND_INFO[i][hi ? 3 : 2]}</small></div>`).join('')}</div><p class="band-move">${copy.legendMove}</p><small class="muted">${copy.legendPins}</small>`;
-}
 const inNcr = () => selectedLocation.latitude > 27.9 && selectedLocation.latitude < 29.3 && selectedLocation.longitude > 76.4 && selectedLocation.longitude < 77.9;
 const hasLeaflet = () => typeof L !== 'undefined';
 const maps = {};
@@ -312,7 +365,8 @@ function refreshMaps() {
   Object.values(maps).forEach(m => {
     if (!m.map.getContainer().offsetParent) return;
     m.map.invalidateSize();
-    if (m.bounds) { m.map.fitBounds(m.bounds, { maxZoom: 13 }); m.bounds = null; }
+    // Overlay panels cover part of full-bleed maps, so each map can pad its fit away from them.
+    if (m.bounds) { m.map.fitBounds(m.bounds, { maxZoom: 13, ...m.pad?.() }); m.bounds = null; }
   });
 }
 
@@ -328,19 +382,20 @@ function renderCoverageMap(stations = []) {
   if (!hasLeaflet()) return renderSchematicMap(stations);
   const copy = ui(), lang = langKey();
   const m = baseMap('stations', document.querySelector('.map-view'));
+  m.pad = () => innerWidth > 900 ? { paddingTopLeft: [420, 24], paddingBottomRight: [24, 24] } : {};
   m.layer.clearLayers();
   const home = [selectedLocation.latitude, selectedLocation.longitude];
   const pts = stations.filter(s => Number.isFinite(s.latitude) && Number.isFinite(s.longitude));
   const maxKm = Math.max(2, ...pts.map(s => s.distanceKm));
   L.circle(home, { radius: maxKm * 1000, color: '#4e8676', weight: 1, dashArray: '4 5', fillColor: '#d6e7d8', fillOpacity: .18, interactive: false }).addTo(m.layer);
   L.marker(home, { icon: homeIcon(), title: selectedLocation.name, keyboard: false }).addTo(m.layer);
-  pts.forEach((s, i) => {
-    const band = bandOf(s.pm2_5);
-    L.marker([s.latitude, s.longitude], { title: s.name, icon: L.divIcon({ className: '', iconSize: [26, 26], html: `<span class="st-pin${s.status !== 'reporting' ? ' stale' : ''}" style="--c:${s.flag ? '#8a8f8c' : band[1]}">${i + 1}</span>` }) })
+  stationMarkers.length = 0;
+  pts.forEach(s => {
+    const band = bandOf(s.pm2_5), i = stations.indexOf(s);
+    stationMarkers[i] = L.marker([s.latitude, s.longitude], { title: s.name, icon: L.divIcon({ className: '', iconSize: [26, 26], html: `<span class="st-pin${s.status !== 'reporting' ? ' stale' : ''}" style="--c:${s.flag ? '#8a8f8c' : band[1]}">${i + 1}</span>` }) })
       .bindPopup(`<b>${safeText(s.name)}</b><br>${Number(s.pm2_5).toFixed(1)} µg/m³ · ${safeText(s.flag ? copy.outlierTag : band[lang === 'hi' ? 3 : 2])}<br><small>${s.distanceKm} km · ${s.status === 'reporting' ? copy.recent : copy.stale} · OpenAQ</small>`).addTo(m.layer);
   });
   m.bounds = pts.length ? L.latLngBounds([home, ...pts.map(s => [s.latitude, s.longitude])]).pad(.12) : L.latLng(home).toBounds(12000);
-  document.querySelector('.map-foot').innerHTML = `<span>${copy.mapFoot} · <i class="key-dot" style="--c:#3f9b6b"></i><i class="key-dot" style="--c:#d9a93c"></i><i class="key-dot" style="--c:#d9793c"></i><i class="key-dot" style="--c:#c2453a"></i></span><span>OpenAQ · ${copy.mapNote}</span>`;
   refreshMaps();
 }
 
@@ -382,6 +437,7 @@ function renderFires() {
   }
   if (!hasLeaflet()) return;
   const m = baseMap('fires', card.querySelector('.fire-map'));
+  m.pad = () => innerWidth > 900 ? { paddingTopLeft: [24, 120], paddingBottomRight: [380, 24] } : { paddingTopLeft: [12, 12] };
   m.layer.clearLayers();
   const home = [selectedLocation.latitude, selectedLocation.longitude];
   let bounds = L.latLngBounds([[6, 68], [37, 97.5]]);
@@ -451,11 +507,14 @@ async function loadWard() {
   const card = document.querySelector('.ward-card');
   const token = ++wardToken;
   card.hidden = true;
-  if (!API_BASE || !inNcr()) return;
+  document.querySelector('.hot-card').hidden = true;
+  if (!API_BASE || (!inNcr() && appMode !== 'gov')) return;
   try {
     const result = await fetch(`${API_BASE}/v1/ward-forecast?lat=${encodeURIComponent(selectedLocation.latitude)}&lon=${encodeURIComponent(selectedLocation.longitude)}`);
     const data = await result.json();
-    if (token !== wardToken || data.state !== 'available' || !data.nearest) return;
+    if (token !== wardToken || data.state !== 'available') return;
+    renderHotspots(data.wards);
+    if (!data.nearest) return;
     const copy = ui(), lang = langKey(), w = data.nearest;
     const cells = Object.entries(w.aqi).map(([h, [low, mid, high]]) => {
       const band = AQI_BANDS.find(b => mid <= b[0]) || AQI_BANDS.at(-1);
@@ -464,6 +523,20 @@ async function loadWard() {
     card.innerHTML = `<div class="section-kicker">${copy.wardKicker}</div><h3>${safeText(copy.wardTitle(w.name))}</h3><p class="muted">${safeText(copy.wardBody(w.distanceKm))}</p><div class="ward-grid">${cells}</div><small class="muted">${copy.wardNote}${data.generatedAt ? ` · ${safeText(String(data.generatedAt).slice(0, 16).replace('T', ' '))} UTC` : ''}</small>`;
     card.hidden = false;
   } catch { /* the card stays hidden */ }
+}
+// Government view: the ten Delhi wards with the highest next-day AQI from the ward GNN.
+function renderHotspots(wards = []) {
+  const card = document.querySelector('.hot-card');
+  card.hidden = appMode !== 'gov' || !wards.length;
+  if (card.hidden) return;
+  const copy = ui(), lang = langKey();
+  const next = w => Object.values(w.aqi)[0];
+  const top = [...wards].sort((a, b) => next(b)[1] - next(a)[1]).slice(0, 10);
+  const max = Math.max(1, next(top[0])[1]);
+  card.innerHTML = `<div class="section-kicker">${copy.hotKicker}</div><h3>${copy.hotTitle}</h3><p class="muted">${copy.hotBody}</p><ol class="hot-list">${top.map(w => {
+    const [low, mid, high] = next(w), band = BANDS[(AQI_BANDS.find(b => mid <= b[0]) || AQI_BANDS.at(-1))[1]];
+    return `<li style="--band:${band[1]};--w:${(mid / max * 100).toFixed(1)}%"><span class="hot-name">${safeText(w.name)}</span><span class="hot-bar"><i></i></span><b>${mid}</b><small>${low}–${high} · ${band[lang === 'hi' ? 3 : 2]}</small></li>`;
+  }).join('')}</ol>`;
 }
 // AQI upper bounds mapped to BANDS rows (CPCB 50/100/200/300/400/500).
 const AQI_BANDS = [[50, 0], [100, 1], [200, 2], [300, 3], [400, 4], [Infinity, 5]];
@@ -519,7 +592,8 @@ function loadExplain(kind, days = 30) {
 function explainHtml(result, copy, label) {
   if (!result) return '';
   const items = result.anomalies.map(a => `<li class="ex-${a.kind}"><b>${safeText(label(a.time))} · ${a.kind === 'spike' ? copy.spike : copy.dip} ${a.value} µg/m³</b> ${safeText(a.note)}</li>`).join('');
-  return `<h4>${copy.explainTitle} <span class="mode-badge ${result.mode === 'bedrock' ? 'bedrock' : 'rules'}">${result.mode === 'bedrock' ? copy.viaBedrockShort : copy.viaRulesShort}</span></h4>${result.mode === 'bedrock' && result.summary ? `<p>${safeText(result.summary)}</p>` : ''}${items ? `<ul>${items}</ul>` : `<p class="muted">${copy.explainNone}</p>`}`;
+  const llm = result.mode === 'bedrock';
+  return `<h4>${copy.explainTitle} <span class="mode-badge ${llm ? 'bedrock' : 'rules'}">${llm ? copy.viaBedrockShort : copy.viaRulesShort}</span></h4>${llm && result.summary ? `<p>${safeText(result.summary)}</p>` : ''}${items ? `<ul>${items}</ul>` : `<p class="muted">${copy.explainNone}</p>`}`;
 }
 
 // Zero-length round-capped stroke = a dot that stays round on a non-uniformly scaled chart.
@@ -575,8 +649,6 @@ function cleanestWindow(points = []) {
   }
   return best;
 }
-
-const personaOptions = className => PERSONA_KEYS.map(key => `<button type="button" role="radio" aria-checked="${key === selectedProfile}" data-profile="${key}" class="${className}${key === selectedProfile ? ' selected' : ''}"><span class="persona-icon" aria-hidden="true">${PERSONAS[key].icon}</span><span><b>${safeText(PERSONAS[key][langKey()][0])}</b><small>${safeText(PERSONAS[key][langKey()][1])}</small></span></button>`).join('');
 
 function setPersona(key) {
   selectedProfile = key;
@@ -639,8 +711,10 @@ function renderIndoor() {
     up.ozone >= 2 && 'ozone', 'plants', band < 2 && !sensitive && 'purifier'
   ].filter(Boolean);
   const best = cleanestWindow(lastData?.forecast);
+  // Personal tips from the home answers go first.
+  const mine = [['solid', 'kerosene'].includes(aboutMe.fuel) && ['🔥', copy.fuelTip], aboutMe.smoker && ['🚭', copy.smokerTip], aboutMe.purifier && ['🌀', copy.purifierTip]].filter(Boolean);
   card.innerHTML = `<div class="section-kicker">${copy.indoorKicker}</div><h3>${copy.indoorTitle}</h3>${Number.isFinite(pm) ? `<p class="indoor-intro">${safeText(copy.indoorIntro(Math.round(pm)))}</p>` : ''}
-    <ul class="indoor-list">${keys.map(key => { const [icon, ...text] = INDOOR_TIPS[key]; const [title, body] = text[hi - 1];
+    <ul class="indoor-list">${mine.map(([icon, text]) => `<li class="mine"><span class="indoor-icon" aria-hidden="true">${icon}</span><span><b>${safeText(text)}</b></span></li>`).join('')}${keys.filter(key => !(aboutMe.purifier && key === 'purifier')).map(key => { const [icon, ...text] = INDOOR_TIPS[key]; const [title, body] = text[hi - 1];
       return `<li><span class="indoor-icon" aria-hidden="true">${icon}</span><span><b>${safeText(title)}</b><small>${safeText(typeof body === 'function' ? body(best && formatTime(best.from)) : body)}</small></span></li>`; }).join('')}</ul>`;
 }
 
@@ -651,6 +725,10 @@ function briefingItems(data) {
   const tone = g.band.index >= 3 ? 'warn' : g.band.index === 2 ? 'caution' : 'ok';
   g.actions[selectedProfile][lang].forEach(action => items.push({ tone, icon: PERSONAS[selectedProfile].icon, title: action, tag: copy.forYou(personaLabel()) }));
   myConditions().forEach(c => (g.conditionActions?.[c]?.[lang] || []).forEach(action => items.push({ tone, icon: CONDITIONS[c].icon, title: action, tag: copy.condTag(CONDITIONS[c][lang]) })));
+  // Routine and home answers from onboarding.
+  if (g.band.index >= 2 && ['3to6', 'gt6'].includes(aboutMe.outdoors)) items.push({ tone, icon: '⏱', title: copy.outsideLong(copy.outsideHours[aboutMe.outdoors]) });
+  if (g.band.index >= 2) (aboutMe.near || []).forEach(n => items.push({ tone: 'caution', icon: '⌂', title: copy[`home${n[0].toUpperCase()}${n.slice(1)}`],
+    body: n === 'road' && ['ground', 'low'].includes(aboutMe.floor) ? copy.homeFloor : '' }));
   const next = (data.forecast || []).slice(0, 7).filter(p => Number.isFinite(p.pm2_5));
   if (next.length > 2) {
     const now = data.estimate?.pm2_5 ?? next[0].pm2_5;
@@ -721,6 +799,9 @@ function renderMore() {
   document.querySelector('.more-sub').textContent = lang === 'hi' ? `पसंदीदा भाषा: हिन्दी · ${personaLabel()}` : `Preferred language: English · ${personaLabel()}`;
   const conds = myConditions().map(c => CONDITIONS[c][lang]);
   document.querySelector('.more-health-sub').textContent = `${PERSONAS[selectedProfile].icon} ${personaLabel()}${conds.length ? ` · ${conds.join(', ')}` : ''}`;
+  const alerts = document.getElementById('moreAlerts');
+  if (alerts.querySelector('.alerts-form')) renderAlertsForm(alerts); else alerts.innerHTML = alertsFormHtml();
+  document.querySelector('.alerts-card summary b').textContent = ui().alertsTitle;
 }
 
 const arrow = (deg, size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" style="transform:rotate(${(deg + 180) % 360}deg)" aria-hidden="true"><path d="M12 3v16m0-16-5 5m5-5 5 5" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -765,7 +846,6 @@ function render(data) {
   document.querySelector('.air-card .section-kicker').firstChild.textContent = 'LIVE SOURCES ';
   renderStations(data.stations);
   renderCoverageMap(data.stations);
-  renderBandLegend();
   renderForecast(data.forecast);
   loadWard();
   renderPersonal();
@@ -791,7 +871,7 @@ async function loadAir() {
     document.querySelector('.aqi-label').textContent = 'Waiting for backend URL';
     rangeEl.textContent = 'Add the API URL in frontend-config.js';
     document.querySelector('.forecast-summary strong').textContent = 'Connect the Saans API to load live forecasts.';
-    stationList.innerHTML = '<div class="empty-state">Live monitor readings will appear here after the API is deployed and connected.</div>';
+    document.querySelector('.stations-card').innerHTML = '<div class="empty-state">Live monitor readings will appear here after the API is deployed and connected.</div>';
     setAssistantEnabled(false);
     return;
   }
@@ -842,7 +922,7 @@ async function ask(question) {
   input.disabled = send.disabled = true;
   try {
     const result = await fetch(`${API_BASE}/v1/ask`, { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ question, lat: selectedLocation.latitude, lon: selectedLocation.longitude, profile: selectedProfile, conditions: myConditions(), lang: currentLanguage, place: selectedLocation.name, history: chatHistory.slice(-8) }) });
+      body: JSON.stringify({ question, lat: selectedLocation.latitude, lon: selectedLocation.longitude, profile: selectedProfile, conditions: myConditions(), about: aboutMe, lang: currentLanguage, place: selectedLocation.name, history: chatHistory.slice(-8) }) });
     const data = await result.json();
     if (!result.ok) throw new Error(data.message);
     chatHistory.push({ role: 'user', text: question }, { role: 'assistant', text: data.answer });
@@ -856,6 +936,38 @@ async function ask(question) {
   }
 }
 response.addEventListener('click', event => { if (event.target.closest('.chat-reset')) resetChat(); });
+
+// Hourly email alerts (SNS). Used on the last onboarding step and in More.
+const alertsFormHtml = () => { const copy = ui();
+  return `<div class="alerts-form" data-freq="hourly"><h4>✉ ${copy.alertsTitle}</h4><p class="muted">${copy.alertsBody}</p><input type="email" maxlength="254" autocomplete="email" placeholder="${copy.alertsEmail}" aria-label="${copy.alertsEmail}"/><div class="seg" role="group">${['hourly', 'changes'].map(f => `<button type="button" data-freq="${f}" class="${f === 'hourly' ? 'on' : ''}" aria-pressed="${f === 'hourly'}">${f === 'hourly' ? copy.alertsHourly : copy.alertsChanges}</button>`).join('')}</div><button type="button" class="next-button alerts-send">${copy.alertsSend} <span>→</span></button><p class="alerts-msg" aria-live="polite"></p></div>`; };
+function renderAlertsForm(box) {
+  const form = box.querySelector('.alerts-form'), keep = form.querySelector('input').value, freq = form.dataset.freq;
+  form.outerHTML = alertsFormHtml();
+  const fresh = box.querySelector('.alerts-form');
+  fresh.querySelector('input').value = keep;
+  fresh.dataset.freq = freq;
+  fresh.querySelectorAll('[data-freq]').forEach(b => { if (b.tagName === 'BUTTON') { b.classList.toggle('on', b.dataset.freq === freq); b.setAttribute('aria-pressed', String(b.dataset.freq === freq)); } });
+}
+async function subscribeAlerts(form) {
+  const copy = ui(), msg = form.querySelector('.alerts-msg'), email = form.querySelector('input').value.trim();
+  if (!API_BASE || !email) return;
+  msg.textContent = '…';
+  try {
+    const result = await fetch(`${API_BASE}/v1/alerts`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, freq: form.dataset.freq,
+      lat: selectedLocation.latitude, lon: selectedLocation.longitude, place: selectedLocation.name, profile: selectedProfile, conditions: myConditions(), lang: currentLanguage }) });
+    const data = await result.json();
+    if (!result.ok) throw new Error(data.message);
+    msg.textContent = copy.alertsSent;
+    toast(copy.alertsSent);
+  } catch (error) { msg.textContent = error.message || copy.alertsFail; toast(error.message || copy.alertsFail); }
+}
+document.addEventListener('click', event => {
+  const form = event.target.closest('.alerts-form');
+  if (!form) return;
+  const freq = event.target.closest('button[data-freq]');
+  if (freq) { form.dataset.freq = freq.dataset.freq; form.querySelectorAll('button[data-freq]').forEach(b => { b.classList.toggle('on', b === freq); b.setAttribute('aria-pressed', String(b === freq)); }); }
+  if (event.target.closest('.alerts-send')) subscribeAlerts(form);
+});
 
 // Searched places and cities persist on this device; a shared device location is never stored.
 function setLocation(location) {
@@ -945,20 +1057,85 @@ document.getElementById('installBtn').addEventListener('click', async () => {
 });
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 
-// Name screen persona picker; the same screen edits name + persona later from the profile button.
-const personaGrid = document.getElementById('personaGrid');
+// Onboarding questionnaire: name, age, work, home, health, then optional email alerts. Answers stay on this device
+// (saans-about) and derive the persona that shapes guidance. Values must match ABOUT_ENUMS in backend/src/assistant.mjs.
+const OB_STEPS = 6;
+const OB_TEXT = {
+  en: { titles: ['What should we<br><em>call you?</em>', 'A little<br><em>about you</em>', 'Your<br><em>day</em>', 'Your<br><em>home</em>', 'Your<br><em>health</em>', 'Stay in<br><em>the loop</em>'],
+    intro: ['Saans shapes alerts and advice around you. Everything you tell it stays on this device.', 'Age changes how much air you breathe and how sensitive your lungs are.', 'Time outdoors and the kind of work you do decide most of your daily dose.',
+      'Where you live and how you cook decide your indoor air. Skip anything you prefer not to answer.', 'Some conditions react to specific pollutants, so Saans watches those for you.', 'Optional: an email every hour with your air and what to do. Leave it blank to skip.'],
+    step: (n, t) => `Step ${n} of ${t}`, next: 'Next', finish: 'Enter Saans', yes: 'Yes', no: 'No', planFor: 'Saans will plan for' },
+  hi: { titles: ['हम आपको<br><em>क्या कहें?</em>', 'अपने बारे में<br><em>थोड़ा बताएँ</em>', 'आपका<br><em>दिन</em>', 'आपका<br><em>घर</em>', 'आपकी<br><em>सेहत</em>', 'जुड़े<br><em>रहें</em>'],
+    intro: ['Saans आपके हिसाब से अलर्ट और सलाह देता है। आप जो बताते हैं वह इसी डिवाइस पर रहता है।', 'उम्र से तय होता है कि आप कितनी हवा लेते हैं और फेफड़े कितने संवेदनशील हैं।', 'बाहर बिताया समय और काम का प्रकार आपकी रोज़ की मात्रा तय करते हैं।',
+      'आप कहाँ रहते हैं और कैसे खाना बनाते हैं, इससे घर की हवा तय होती है। जो न बताना चाहें छोड़ दें।', 'कुछ बीमारियाँ ख़ास प्रदूषकों पर प्रतिक्रिया करती हैं, Saans उन पर नज़र रखता है।', 'वैकल्पिक: हर घंटे आपकी हवा और क्या करें, ईमेल पर। छोड़ने के लिए ख़ाली रखें।'],
+    step: (n, t) => `चरण ${n} / ${t}`, next: 'आगे', finish: 'Saans खोलें', yes: 'हाँ', no: 'नहीं', planFor: 'Saans इनके लिए योजना बनाएगा' }
+};
+// [step, key, en, hi, options [value, icon, en, hi] | 'bool', multi?, shown when?]
+const OB_QUESTIONS = [
+  [1, 'age', 'Age group', 'आयु वर्ग', [['child', '🧒', 'Child (under 12)', 'बच्चा (12 से कम)'], ['teen', '🧑', 'Teenager (12–17)', 'किशोर (12–17)'], ['adult', '🧑‍💼', 'Adult (18–59)', 'वयस्क (18–59)'], ['senior', '👴', '60 or older', '60 या अधिक']]],
+  [1, 'pregnant', 'Are you pregnant?', 'क्या आप गर्भवती हैं?', 'bool', false, a => a.age === 'adult' || a.age === 'teen'],
+  [2, 'work', 'What do you do most days?', 'ज़्यादातर दिन आप क्या करते हैं?', [['office', '🏢', 'Office or indoor job', 'दफ़्तर या अंदर का काम'], ['construction', '👷', 'Construction or labour', 'निर्माण या मज़दूरी'], ['delivery', '🛵', 'Delivery, driving or long commute', 'डिलीवरी, ड्राइविंग या लंबा सफ़र'], ['student', '🎒', 'Student', 'विद्यार्थी'],
+    ['homemaker', '🏠', 'Homemaker', 'गृहिणी / गृहस्थ'], ['vendor', '🛒', 'Street vendor or shopkeeper', 'रेहड़ी या दुकानदार'], ['athlete', '🏃', 'Sport or outdoor training', 'खेल या बाहर अभ्यास'], ['retired', '🪑', 'Retired', 'सेवानिवृत्त']]],
+  [2, 'outdoors', 'Hours outdoors on a typical day', 'आम दिन में बाहर कितने घंटे', [['lt1', '◔', 'Under 1 h', '1 घंटे से कम'], ['1to3', '◑', '1–3 h', '1–3 घंटे'], ['3to6', '◕', '3–6 h', '3–6 घंटे'], ['gt6', '●', 'Over 6 h', '6 घंटे से ज़्यादा']]],
+  [3, 'floor', 'Which floor do you live on?', 'आप किस मंज़िल पर रहते हैं?', [['ground', '⬓', 'Ground floor', 'भूतल'], ['low', '▤', '1st–3rd floor', '1–3 मंज़िल'], ['mid', '▥', '4th–9th floor', '4–9 मंज़िल'], ['high', '▦', '10th or higher', '10वीं या ऊपर']]],
+  [3, 'near', 'Near your home (pick any)', 'घर के पास (जितने लागू हों)', [['road', '🛣️', 'Main road or busy gate', 'मुख्य सड़क या व्यस्त गेट'], ['construction', '🏗️', 'Construction site', 'निर्माण स्थल'], ['industry', '🏭', 'Factory or industrial area', 'फ़ैक्टरी या औद्योगिक क्षेत्र'], ['burning', '🔥', 'Garbage or crop burning', 'कूड़ा या फ़सल जलाना']], true],
+  [3, 'fuel', 'Cooking fuel', 'खाना पकाने का ईंधन', [['clean', '🔵', 'LPG or electric', 'LPG या बिजली'], ['solid', '🪵', 'Wood, coal or dung', 'लकड़ी, कोयला या उपले'], ['kerosene', '🛢️', 'Kerosene', 'केरोसिन']]],
+  [3, 'smoker', 'Does anyone smoke indoors?', 'क्या घर में कोई धूम्रपान करता है?', 'bool'],
+  [3, 'purifier', 'Do you have an air purifier?', 'क्या आपके पास एयर प्यूरीफ़ायर है?', 'bool']
+];
+let obStep = 0;
+let pendingAbout = { ...aboutMe };
 let pendingPersona = selectedProfile;
-function renderPersonaGrid() {
-  const keep = selectedProfile;
-  selectedProfile = pendingPersona;
-  personaGrid.innerHTML = personaOptions('persona-option');
-  selectedProfile = keep;
+
+// Persona from the answers: life stage first, then work, then a heart or lung condition.
+function derivePersona(about, conditions) {
+  if (about.pregnant) return 'pregnant';
+  if (about.age === 'child') return 'children';
+  if (about.age === 'senior') return 'older';
+  const byWork = { construction: 'outdoor_worker', vendor: 'outdoor_worker', delivery: 'commuter', athlete: 'athlete' }[about.work];
+  if (byWork) return byWork;
+  if (conditions.some(c => ['asthma', 'copd', 'heart'].includes(c))) return 'heart_lung';
+  return about.outdoors === 'gt6' ? 'outdoor_worker' : 'general';
 }
-personaGrid.addEventListener('click', event => {
-  const button = event.target.closest('.persona-option');
-  if (!button) return;
-  pendingPersona = button.dataset.profile;
-  renderPersonaGrid();
+
+function renderOb() {
+  const lang = langKey(), t = OB_TEXT[lang], form = document.getElementById('nameForm');
+  document.querySelector('.name-card h1').innerHTML = t.titles[obStep];
+  document.querySelector('.ob-intro').textContent = t.intro[obStep];
+  form.querySelector('.ob-count').textContent = t.step(obStep + 1, OB_STEPS);
+  form.querySelector('.ob-progress i').style.width = `${(obStep + 1) / OB_STEPS * 100}%`;
+  form.querySelectorAll('.ob-step').forEach(el => { el.hidden = Number(el.dataset.step) !== obStep; });
+  form.querySelector('.ob-back').hidden = obStep === 0;
+  form.querySelector('.enter-button').innerHTML = `${obStep === OB_STEPS - 1 ? t.finish : t.next} <span>→</span>`;
+  if (obStep >= 1 && obStep <= 3) {
+    form.querySelector(`.ob-step[data-step="${obStep}"]`).innerHTML = OB_QUESTIONS.filter(q => q[0] === obStep && (!q[6] || q[6](pendingAbout))).map(([, key, en, hi, options, multi]) => {
+      const opts = options === 'bool' ? [[true, '', t.yes], [false, '', t.no]] : options.map(([v, icon, oen, ohi]) => [v, icon, lang === 'hi' ? ohi : oen]);
+      const on = v => multi ? (pendingAbout[key] || []).includes(v) : pendingAbout[key] === v;
+      return `<fieldset class="ob-q"><legend>${safeText(lang === 'hi' ? hi : en)}</legend><div class="ob-chips${options === 'bool' ? ' ob-bool' : ''}">${opts.map(([v, icon, label]) => `<button type="button" data-q="${key}" data-v="${v}" aria-pressed="${on(v)}" class="${on(v) ? 'selected' : ''}">${icon ? `<span aria-hidden="true">${icon}</span> ` : ''}${safeText(label)}</button>`).join('')}</div></fieldset>`;
+    }).join('');
+  }
+  if (obStep === 4) renderConditionField();
+  if (obStep === 5) {
+    const box = form.querySelector('.ob-step[data-step="5"]');
+    const persona = derivePersona(pendingAbout, conditionYes ? pendingConditions : []);
+    if (!box.querySelector('.alerts-form')) box.innerHTML = alertsFormHtml();
+    else renderAlertsForm(box);
+    box.querySelector('.ob-persona')?.remove();
+    box.insertAdjacentHTML('afterbegin', `<p class="ob-persona">${t.planFor}: <b>${PERSONAS[persona].icon} ${safeText(PERSONAS[persona][lang][0])}</b></p>`);
+  }
+}
+
+document.getElementById('nameForm').addEventListener('click', event => {
+  const chip = event.target.closest('[data-q]');
+  if (chip) {
+    const q = OB_QUESTIONS.find(x => x[1] === chip.dataset.q);
+    const v = q[4] === 'bool' ? chip.dataset.v === 'true' : chip.dataset.v;
+    if (q[5]) { const list = pendingAbout[q[1]] || []; pendingAbout[q[1]] = list.includes(v) ? list.filter(x => x !== v) : [...list, v]; }
+    else pendingAbout[q[1]] = pendingAbout[q[1]] === v ? undefined : v; // tap again to clear
+    if (q[1] === 'age' && !['adult', 'teen'].includes(pendingAbout.age)) delete pendingAbout.pregnant;
+    renderOb();
+  }
+  if (event.target.closest('.ob-back')) { obStep = Math.max(0, obStep - 1); renderOb(); }
 });
 
 // Name screen health-condition question: No / Yes, then pick any that apply.
@@ -986,8 +1163,9 @@ function openProfile(welcome = false) {
   pendingPersona = selectedProfile;
   pendingConditions = myConditions();
   conditionYes = pendingConditions.length > 0;
-  renderPersonaGrid();
-  renderConditionField();
+  pendingAbout = { ...aboutMe };
+  obStep = 0;
+  renderOb();
   document.querySelector('.app-shell').hidden = true;
   document.querySelector('.mobile-nav').hidden = true;
   document.getElementById('chatFab').hidden = true;
@@ -1018,6 +1196,7 @@ function enterSaans(name) {
   renderHeadings();
   if (renaming) { renaming = false; document.getElementById('chatFab').hidden = !lastData; return; }
   loadAir();
+  if (appMode === 'citizen') setTimeout(maybeShowQuizPopup, 1500);
 }
 
 buildPages();
@@ -1045,8 +1224,8 @@ document.getElementById('moreProfile').addEventListener('click', () => openProfi
 document.getElementById('moreHealth').addEventListener('click', () => openProfile());
 document.getElementById('replayWelcome').addEventListener('click', () => openProfile(true));
 const translations = {
-  en: { welcomeTitle: 'Know the air.<br><em>Find your next breath.</em>', welcomeDesc: 'Saans brings together nearby monitors, weather and smoke movement to make the air around you easier to understand — starting with communities across India.', next: 'Next', featureTitle: 'Understand the air where you live in India.', airTile: 'See what’s in the air', watchTile: 'Follow what’s moving', guideTile: 'Make it personal', chatTile: 'Ask in your own words', healthProfile: 'Health profile', replay: 'Replay welcome', language: 'Language', location: 'Location', city: 'Indian city', reduceMotion: 'Reduce motion', howTo: 'How to use Saans', dataPrivacy: 'Data and privacy', nameTitle: 'Who is Saans<br><em>planning for?</em>', personaLegend: 'WHO ARE YOU PLANNING FOR?', enter: 'Enter Saans' },
-  hi: { welcomeTitle: 'हवा को जानें।<br><em>अपनी अगली साँस को समझें।</em>', welcomeDesc: 'Saans आसपास के मॉनिटर, मौसम और धुएँ की दिशा को जोड़ता है — भारत के शहरों और समुदायों के लिए।', next: 'आगे', featureTitle: 'भारत में अपने शहर की हवा को समझें।', airTile: 'हवा में क्या है', watchTile: 'हवा की दिशा देखें', guideTile: 'आपके परिवार के लिए', chatTile: 'अपने शब्दों में पूछें', healthProfile: 'स्वास्थ्य प्रोफ़ाइल', replay: 'परिचय फिर देखें', language: 'भाषा', location: 'स्थान', city: 'भारतीय शहर', reduceMotion: 'गतिशीलता कम करें', howTo: 'Saans का उपयोग कैसे करें', dataPrivacy: 'डेटा और गोपनीयता', nameTitle: 'Saans किसके लिए<br><em>योजना बनाए?</em>', personaLegend: 'आप किसके लिए योजना बना रहे हैं?', enter: 'Saans खोलें' }
+  en: { welcomeTitle: 'Know the air.<br><em>Find your next breath.</em>', welcomeDesc: 'Saans brings together nearby monitors, weather and smoke movement to make the air around you easier to understand — starting with communities across India.', next: 'Next', featureTitle: 'Understand the air where you live in India.', airTile: 'See what’s in the air', watchTile: 'Follow what’s moving', guideTile: 'Make it personal', chatTile: 'Ask in your own words', healthProfile: 'Health profile', replay: 'Replay welcome', language: 'Language', location: 'Location', city: 'Indian city', reduceMotion: 'Reduce motion', howTo: 'How to use Saans', dataPrivacy: 'Data and privacy' },
+  hi: { welcomeTitle: 'हवा को जानें।<br><em>अपनी अगली साँस को समझें।</em>', welcomeDesc: 'Saans आसपास के मॉनिटर, मौसम और धुएँ की दिशा को जोड़ता है — भारत के शहरों और समुदायों के लिए।', next: 'आगे', featureTitle: 'भारत में अपने शहर की हवा को समझें।', airTile: 'हवा में क्या है', watchTile: 'हवा की दिशा देखें', guideTile: 'आपके परिवार के लिए', chatTile: 'अपने शब्दों में पूछें', healthProfile: 'स्वास्थ्य प्रोफ़ाइल', replay: 'परिचय फिर देखें', language: 'भाषा', location: 'स्थान', city: 'भारतीय शहर', reduceMotion: 'गतिशीलता कम करें', howTo: 'Saans का उपयोग कैसे करें', dataPrivacy: 'डेटा और गोपनीयता' }
 };
 function applyLanguage(language) {
   currentLanguage = translations[language] ? language : 'en';
@@ -1065,12 +1244,8 @@ function applyLanguage(language) {
   document.querySelector('#useCurrentLocation b').textContent = copy.location;
   document.querySelector('label[for="citySelect"] b').textContent = copy.city;
   document.querySelector('.motion-setting b').textContent = copy.reduceMotion;
-  document.querySelector('.name-card h1').innerHTML = copy.nameTitle;
-  document.querySelector('.persona-field legend').textContent = copy.personaLegend;
-  document.querySelector('.enter-button').innerHTML = `${copy.enter} <span>→</span>`;
   if (!document.getElementById('chatInput').disabled) document.getElementById('chatInput').placeholder = ui().askPlaceholder;
-  renderPersonaGrid();
-  renderConditionField();
+  renderOb();
   renderHeadings();
   if (lastData) render(lastData); else renderPersonal();
 }
@@ -1102,7 +1277,15 @@ document.getElementById('backToWelcome').addEventListener('click', () => {
 });
 document.getElementById('nameForm').addEventListener('submit', event => {
   event.preventDefault();
-  enterSaans(document.getElementById('nameInput').value);
+  const input = document.getElementById('nameInput');
+  if (!input.value.trim()) { obStep = 0; renderOb(); input.reportValidity(); input.focus(); return; }
+  if (obStep < OB_STEPS - 1) { obStep++; renderOb(); window.scrollTo(0, 0); return; }
+  const email = document.querySelector('#nameForm .alerts-form input[type=email]')?.value.trim();
+  aboutMe = Object.fromEntries(Object.entries(pendingAbout).filter(([, v]) => v !== undefined && !(Array.isArray(v) && !v.length)));
+  try { localStorage.setItem('saans-about', JSON.stringify(aboutMe)); } catch { /* session only */ }
+  pendingPersona = derivePersona(aboutMe, conditionYes ? pendingConditions : []);
+  enterSaans(input.value);
+  if (email) subscribeAlerts(document.querySelector('#nameForm .alerts-form'));
 });
 let savedName = '';
 try { savedName = localStorage.getItem('saans-display-name') || ''; } catch { /* private browsing may disable storage */ }

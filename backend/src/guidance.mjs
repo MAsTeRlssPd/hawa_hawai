@@ -76,6 +76,12 @@ const CONDITION_EXTRAS = {
     [0, 'Coarse dust (PM10) is your main trigger: watch the PM10 level as well as PM2.5.', 'मोटी धूल (PM10) आपके लिए मुख्य ट्रिगर है: PM2.5 के साथ PM10 स्तर भी देखें।'],
     [1, 'Wash your face and change clothes after dusty outdoor time; wet-mop instead of sweeping.', 'धूल भरे बाहर के समय के बाद चेहरा धोएँ और कपड़े बदलें; झाड़ू की जगह गीला पोछा लगाएँ।'],
     [3, 'Wraparound glasses and a well-fitted mask cut dust reaching your eyes and nose.', 'चारों ओर से ढकने वाला चश्मा और अच्छी तरह फिट मास्क आँखों और नाक तक धूल कम पहुँचने देते हैं।']],
+  eye: [
+    [0, 'Smoke, dust and ozone irritate the eyes: rinse them with clean water after time outdoors and try not to rub them.', 'धुआँ, धूल और ओज़ोन आँखों में जलन करते हैं: बाहर से आकर आँखें साफ़ पानी से धोएँ और उन्हें रगड़ें नहीं।'],
+    [3, 'Wear wraparound glasses outdoors; use eye drops only as your doctor advised.', 'बाहर चारों ओर से ढकने वाला चश्मा पहनें; आई ड्रॉप सिर्फ़ डॉक्टर की सलाह से डालें।']],
+  sinus: [
+    [1, 'A blocked nose makes you breathe through your mouth, which lets more particles in: keep a well-fitted mask for dusty or smoky stretches.', 'बंद नाक से आप मुँह से साँस लेते हैं, जिससे ज़्यादा कण अंदर जाते हैं: धूल या धुएँ वाले रास्तों के लिए अच्छी तरह फिट मास्क रखें।'],
+    [3, 'Steam or a saline rinse after dusty outings can ease congestion; ask your doctor what suits you.', 'धूल भरे बाहर के समय के बाद भाप या नमक के पानी से नाक धोना जकड़न में आराम दे सकता है; डॉक्टर से पूछें कि आपके लिए क्या ठीक है।']],
   heart: [
     [1, 'Avoid hard exertion near traffic.', 'ट्रैफ़िक के पास भारी मेहनत से बचें।'],
     [2, 'Stop and rest if you feel chest pain, palpitations or unusual breathlessness, and seek care if it does not settle.', 'सीने में दर्द, धड़कन तेज़ होने या असामान्य साँस फूलने पर रुककर आराम करें, और ठीक न हो तो चिकित्सा सहायता लें।']],

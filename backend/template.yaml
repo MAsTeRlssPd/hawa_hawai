@@ -18,6 +18,10 @@ Parameters:
     Type: String
     Default: apac.amazon.nova-lite-v1:0
     Description: Bedrock model or inference profile for Ask Saans. Empty string uses the built-in rule-based answers only.
+  AppUrl:
+    Type: String
+    Default: ''
+    Description: Public website URL linked from alert emails.
 Globals:
   Function:
     Runtime: nodejs22.x
@@ -33,6 +37,9 @@ Globals:
         POWERTOOLS_SERVICE_NAME: saans-api
         BEDROCK_MODEL_ID: !Ref BedrockModelId
         FORECAST_BUCKET: !Ref ForecastBucket
+        ALERTS_TOPIC: !Ref AlertsTopic
+        SUBSCRIBERS_TABLE: !Ref AlertSubscribers
+        APP_URL: !Ref AppUrl
 Resources:
   # Delhi ward GNN forecasts land here hourly from the separate gnn/ stack (container Lambda).
   ForecastBucket:
@@ -72,6 +79,25 @@ Resources:
         PointInTimeRecoveryEnabled: false
       SSESpecification:
         SSEEnabled: true
+  # Email alerts: one topic, per-subscriber filter policies; the table holds each subscriber's place and preferences.
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-alerts'
+      DisplayName: Saans
+  AlertSubscribers:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'saans-alert-subscribers-${AWS::StackName}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
   AirApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -94,12 +120,19 @@ Resources:
       CodeUri: src/
       Handler: handler.handler
       FunctionName: !Sub '${AWS::StackName}-air-data'
+      # HTTP API integrations give up at 30 s; trip planning (OSRM + per-cell forecasts) and Bedrock can take 10-20 s.
+      Timeout: 29
       # No ReservedConcurrentExecutions: new accounts have a 10-execution limit and AWS rejects any reservation
       # that leaves fewer than 10 unreserved. API throttling below caps load instead.
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref AirCache
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AlertSubscribers
         - Statement:
+            - Effect: Allow
+              Action: [sns:Subscribe]
+              Resource: !Ref AlertsTopic
             - Effect: Allow
               Action: [ssm:GetParameter]
               Resource:
@@ -166,6 +199,55 @@ Resources:
             ApiId: !Ref AirApi
             Path: /v1/ward-forecast
             Method: GET
+        Route:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/route
+            Method: GET
+        Alerts:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AirApi
+            Path: /v1/alerts
+            Method: POST
+  # EventBridge Scheduler, every hour at :05 (after the CAMS/OpenAQ hour turns over).
+  AlertsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AlertsLogGroup
+    Properties:
+      CodeUri: src/
+      Handler: handler.alerts
+      FunctionName: !Sub '${AWS::StackName}-alerts'
+      Timeout: 300
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AirCache
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AlertSubscribers
+        - Statement:
+            - Effect: Allow
+              Action: [ssm:GetParameter]
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OpenAqParameterName}'
+                - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${FirmsParameterName}'
+            - Effect: Allow
+              Action: [kms:Decrypt]
+              Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+            - Effect: Allow
+              Action: [sns:Publish, sns:GetSubscriptionAttributes]
+              Resource: [!Ref AlertsTopic, !Sub '${AlertsTopic}:*']
+      Events:
+        Hourly:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(5 * * * ? *)
+            ScheduleExpressionTimezone: Asia/Kolkata
+  AlertsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-alerts'
+      RetentionInDays: 14
   AirDataLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -293,3 +375,5 @@ Outputs:
     Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#xray:traces/query'
   AuditBucketName:
     Value: !Ref AuditBucket
+  AlertsTopicArn:
+    Value: !Ref AlertsTopic
