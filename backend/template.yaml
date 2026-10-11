@@ -66,70 +66,18 @@ Resources:
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
-  # Website: private bucket, served only through CloudFront (Origin Access Control) over HTTPS.
-  # Upload with backend/deploy-site.sh after the stack is deployed.
-  SiteBucket:
-    Type: AWS::S3::Bucket
+  # Website on Amplify Hosting (HTTPS + CDN). Upload with backend/deploy-site.sh after the stack is deployed.
+  SiteApp:
+    Type: AWS::Amplify::App
     Properties:
-      BucketName: !Sub 'saans-site-${AWS::AccountId}-${AWS::Region}'
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-  SiteOriginAccessControl:
-    Type: AWS::CloudFront::OriginAccessControl
+      Name: !Sub '${AWS::StackName}-site'
+      Platform: WEB
+  SiteBranch:
+    Type: AWS::Amplify::Branch
     Properties:
-      OriginAccessControlConfig:
-        Name: !Sub '${AWS::StackName}-site'
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-  SiteDistribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Enabled: true
-        Comment: Saans website
-        DefaultRootObject: index.html
-        HttpVersion: http2and3
-        IPV6Enabled: true
-        PriceClass: PriceClass_200 # includes India edge locations
-        Origins:
-          - Id: site
-            DomainName: !GetAtt SiteBucket.RegionalDomainName
-            OriginAccessControlId: !GetAtt SiteOriginAccessControl.Id
-            S3OriginConfig:
-              OriginAccessIdentity: ''
-        DefaultCacheBehavior:
-          TargetOriginId: site
-          ViewerProtocolPolicy: redirect-to-https
-          AllowedMethods: [GET, HEAD]
-          Compress: true
-          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized (honours each file's Cache-Control)
-          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy (HSTS, nosniff, frame options)
-  SiteBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref SiteBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: cloudfront.amazonaws.com
-            Action: s3:GetObject
-            Resource: !Sub '${SiteBucket.Arn}/*'
-            Condition:
-              StringEquals:
-                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}'
+      AppId: !GetAtt SiteApp.AppId
+      BranchName: main
+      Stage: PRODUCTION
   AirCache:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -511,12 +459,10 @@ Resources:
         ]}
 Outputs:
   SiteUrl:
-    Description: Public website (CloudFront, HTTPS)
-    Value: !Sub 'https://${SiteDistribution.DomainName}'
-  SiteBucketName:
-    Value: !Ref SiteBucket
-  SiteDistributionId:
-    Value: !Ref SiteDistribution
+    Description: Public website (Amplify Hosting, HTTPS)
+    Value: !Sub 'https://main.${SiteApp.DefaultDomain}'
+  SiteAppId:
+    Value: !GetAtt SiteApp.AppId
   ForecastBucketName:
     Description: Pass to the gnn/ stack as ForecastBucket
     Value: !Ref ForecastBucket
