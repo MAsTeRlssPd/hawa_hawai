@@ -76,7 +76,7 @@ Resources:
     Type: AWS::Amplify::Branch
     Properties:
       AppId: !GetAtt SiteApp.AppId
-      BranchName: main
+      BranchName: saans
       Stage: PRODUCTION
   AirCache:
     Type: AWS::DynamoDB::Table
@@ -460,7 +460,9 @@ Resources:
 Outputs:
   SiteUrl:
     Description: Public website (Amplify Hosting, HTTPS)
-    Value: !Sub 'https://main.${SiteApp.DefaultDomain}'
+    Value: !Sub 'https://${SiteBranch.BranchName}.${SiteApp.DefaultDomain}'
+  SiteBranchName:
+    Value: !GetAtt SiteBranch.BranchName
   SiteAppId:
     Value: !GetAtt SiteApp.AppId
   ForecastBucketName:
