@@ -76,7 +76,7 @@ Copy the `ApiBaseUrl` output into `frontend-config.js`:
 window.SAANS_API_BASE = 'https://YOUR_API_ID.execute-api.ap-south-1.amazonaws.com/prod';
 ```
 
-Serve the website locally for development, or host the root files on HTTPS (for example, AWS Amplify Hosting). A service worker and install prompt require localhost or HTTPS. The public website files are `index.html`, `styles.css`, `health.js`, `trip.js`, `quiz.js`, `app.js`, `frontend-config.js`, `manifest.webmanifest`, `icon.svg`, and `sw.js`.
+Serve the website locally for development. The stack also hosts it: a private S3 bucket behind CloudFront (HTTPS, Origin Access Control). After `sam deploy`, run `bash backend/deploy-site.sh` to upload the files and refresh the cache; it prints the public `SiteUrl`. A service worker and install prompt require localhost or HTTPS. The public website files are `index.html`, `styles.css`, `health.js`, `trip.js`, `quiz.js`, `app.js`, `frontend-config.js`, `manifest.webmanifest`, `icon.svg`, and `sw.js`.
 
 ## Delhi ward GNN forecaster (optional, separate stack)
 
