@@ -69,7 +69,7 @@ const UI = {
     fuelTip: 'Cooking on wood, coal or kerosene is usually the biggest source of smoke at home: cook with a window and door open, or switch to LPG when you can.',
     smokerTip: 'Smoking indoors raises PM2.5 more than most bad outdoor days: smoke outside, away from children.', purifierTip: 'You have an air purifier: run it in the bedroom with the door shut, and change the filter on time.',
     outsideHours: { lt1: 'under an hour', '1to3': '1–3 hours', '3to6': '3–6 hours a day', gt6: 'over 6 hours a day' },
-    hotKicker: 'DELHI WARDS · GNN FORECAST', hotTitle: 'Ward hotspots in the next 24 hours', hotBody: 'Wards with the highest forecast AQI, to prioritise inspections, water sprinkling and construction checks.',
+   
     alertsTitle: 'Hourly email alerts', alertsBody: 'Get your AQI, the cleanest hours and what to do, by email every hour (quiet 10 pm–7 am unless the air turns very poor).',
     alertsEmail: 'Email address', alertsHourly: 'Every hour', alertsChanges: 'Only when the level changes', alertsSend: 'Start alerts', alertsSent: 'Almost done: open the email from AWS Notifications and click “Confirm subscription”.', alertsFail: 'Could not set up alerts right now.',
     notMedical: 'Not medical advice', noEstimate: 'Guidance appears once a PM2.5 estimate is available.',
@@ -121,7 +121,7 @@ const UI = {
     fuelTip: 'लकड़ी, कोयले या केरोसिन पर खाना बनाना अक्सर घर में धुएँ का सबसे बड़ा स्रोत होता है: खिड़की-दरवाज़ा खोलकर पकाएँ या जब हो सके LPG अपनाएँ।',
     smokerTip: 'घर में धूम्रपान ज़्यादातर ख़राब दिनों से भी ज़्यादा PM2.5 बढ़ाता है: बाहर और बच्चों से दूर पिएँ।', purifierTip: 'आपके पास प्यूरीफ़ायर है: उसे सोने के कमरे में दरवाज़ा बंद करके चलाएँ और फ़िल्टर समय पर बदलें।',
     outsideHours: { lt1: 'एक घंटे से कम', '1to3': '1–3 घंटे', '3to6': 'रोज़ 3–6 घंटे', gt6: 'रोज़ 6 घंटे से ज़्यादा' },
-    hotKicker: 'दिल्ली वार्ड · GNN पूर्वानुमान', hotTitle: 'अगले 24 घंटों में वार्ड हॉटस्पॉट', hotBody: 'सबसे ज़्यादा अनुमानित AQI वाले वार्ड, ताकि निरीक्षण, पानी छिड़काव और निर्माण जाँच को प्राथमिकता दी जा सके।',
+   
     alertsTitle: 'हर घंटे ईमेल अलर्ट', alertsBody: 'हर घंटे ईमेल पर अपना AQI, सबसे साफ़ समय और क्या करें पाएँ (रात 10 से सुबह 7 बजे तक बंद, जब तक हवा बहुत ख़राब न हो)।',
     alertsEmail: 'ईमेल पता', alertsHourly: 'हर घंटे', alertsChanges: 'सिर्फ़ स्तर बदलने पर', alertsSend: 'अलर्ट शुरू करें', alertsSent: 'लगभग हो गया: AWS Notifications का ईमेल खोलें और “Confirm subscription” पर क्लिक करें।', alertsFail: 'अभी अलर्ट सेट नहीं हो सके।',
     notMedical: 'चिकित्सकीय सलाह नहीं', noEstimate: 'PM2.5 अनुमान मिलने पर सलाह दिखेगी।',
@@ -201,14 +201,11 @@ function buildPages() {
   historyCard.className = 'card history-card';
   historyCard.addEventListener('click', event => { const button = event.target.closest('[data-days]'); if (button) { historyDays = Number(button.dataset.days); historyCard.dataset.key = ''; loadHistory(); } });
 
-  const hotCard = document.createElement('article');
-  hotCard.className = 'card hot-card';
-  hotCard.hidden = true;
   stations.addEventListener('click', event => { const row = event.target.closest('[data-st]'); if (row) focusStation(Number(row.dataset.st)); });
 
   grid.append(
     today,
-    page('overview', div('air-primary', air, forecast), hotCard, wardCard, historyCard),
+    page('overview', div('air-primary', air, forecast), wardCard, historyCard),
     page('airspace', div('airspace-stage', map, stations)),
     page('health', adviceCard, div('health-body'), indoorCard, div('health-dose')),
     page('trip', div('trip-root')),
@@ -264,7 +261,6 @@ function setMode(mode) {
   appMode = mode in MODES ? mode : 'citizen';
   try { localStorage.setItem('saans-mode', appMode); } catch { /* session only */ }
   renderHeadings();
-  loadWard();
 }
 
 // One page at a time; the URL hash is the router so links, back button and refresh all work.
@@ -507,13 +503,11 @@ async function loadWard() {
   const card = document.querySelector('.ward-card');
   const token = ++wardToken;
   card.hidden = true;
-  document.querySelector('.hot-card').hidden = true;
-  if (!API_BASE || (!inNcr() && appMode !== 'gov')) return;
+  if (!API_BASE || !inNcr()) return;
   try {
     const result = await fetch(`${API_BASE}/v1/ward-forecast?lat=${encodeURIComponent(selectedLocation.latitude)}&lon=${encodeURIComponent(selectedLocation.longitude)}`);
     const data = await result.json();
     if (token !== wardToken || data.state !== 'available') return;
-    renderHotspots(data.wards);
     if (!data.nearest) return;
     const copy = ui(), lang = langKey(), w = data.nearest;
     const cells = Object.entries(w.aqi).map(([h, [low, mid, high]]) => {
@@ -523,20 +517,6 @@ async function loadWard() {
     card.innerHTML = `<div class="section-kicker">${copy.wardKicker}</div><h3>${safeText(copy.wardTitle(w.name))}</h3><p class="muted">${safeText(copy.wardBody(w.distanceKm))}</p><div class="ward-grid">${cells}</div><small class="muted">${copy.wardNote}${data.generatedAt ? ` · ${safeText(String(data.generatedAt).slice(0, 16).replace('T', ' '))} UTC` : ''}</small>`;
     card.hidden = false;
   } catch { /* the card stays hidden */ }
-}
-// Government view: the ten Delhi wards with the highest next-day AQI from the ward GNN.
-function renderHotspots(wards = []) {
-  const card = document.querySelector('.hot-card');
-  card.hidden = appMode !== 'gov' || !wards.length;
-  if (card.hidden) return;
-  const copy = ui(), lang = langKey();
-  const next = w => Object.values(w.aqi)[0];
-  const top = [...wards].sort((a, b) => next(b)[1] - next(a)[1]).slice(0, 10);
-  const max = Math.max(1, next(top[0])[1]);
-  card.innerHTML = `<div class="section-kicker">${copy.hotKicker}</div><h3>${copy.hotTitle}</h3><p class="muted">${copy.hotBody}</p><ol class="hot-list">${top.map(w => {
-    const [low, mid, high] = next(w), band = BANDS[(AQI_BANDS.find(b => mid <= b[0]) || AQI_BANDS.at(-1))[1]];
-    return `<li style="--band:${band[1]};--w:${(mid / max * 100).toFixed(1)}%"><span class="hot-name">${safeText(w.name)}</span><span class="hot-bar"><i></i></span><b>${mid}</b><small>${low}–${high} · ${band[lang === 'hi' ? 3 : 2]}</small></li>`;
-  }).join('')}</ol>`;
 }
 // AQI upper bounds mapped to BANDS rows (CPCB 50/100/200/300/400/500).
 const AQI_BANDS = [[50, 0], [100, 1], [200, 2], [300, 3], [400, 4], [Infinity, 5]];
