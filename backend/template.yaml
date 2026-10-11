@@ -281,8 +281,8 @@ Resources:
             # New accounts have 10 concurrent Lambda executions; leave room for the API.
             MaxConcurrency: 3
             ItemSelector:
-              email.$: $.Map.Item.Value
-              now.$: $.Execution.StartTime
+              email.$: $$.Map.Item.Value
+              now.$: $$.Execution.StartTime
             ItemProcessor:
               ProcessorConfig:
                 Mode: INLINE
