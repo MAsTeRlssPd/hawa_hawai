@@ -55,10 +55,9 @@ const affectsMe = p => p.affects.includes(selectedProfile) || myConditions().som
 const UI = {
   en: { bandSuffix: 'CPCB PM2.5 band · indicative', guidanceKicker: 'GUIDANCE FOR TODAY', forWho: 'What to do', cpcbSays: 'CPCB health impact', cleanest: 'Cleanest hours in the next day (model)',
     editProfile: 'Change persona or conditions', condTag: label => `Your condition · ${label}`,
-    aqiCircle: 'AQI · indicative', aqiMostly: name => `Mostly ${name}`, aqiNote: 'Indicative AQI (CPCB method on model data), not the official CPCB AQI.', outlookL: h => `In ${h} h`,
+    aqiCircle: 'AQI · indicative', aqiMostly: name => `Mostly ${name}`, aqiNote: 'Indicative AQI (CPCB method on model data), not the official CPCB AQI.',
     tipAt: (t, pm, aqi) => `<b>${t}</b>PM2.5 ${pm} µg/m³${aqi == null ? '' : ` · AQI ${aqi}`}`, spike: 'Spike', dip: 'Dip', explainTitle: 'Why the line jumps', explainLoading: 'Looking for unusual hours…', explainNone: 'No unusual spikes or dips in this period.', viaBedrockShort: 'Explained by Amazon Bedrock', viaGeminiShort: 'Explained by Gemini', viaRulesShort: 'Explained from weather data',
     indoorKicker: 'INDOOR AIR', indoorTitle: 'Cleaner air at home', indoorIntro: pm => `Outdoor PM2.5 is ~${pm} µg/m³. With windows shut, part of it still leaks in, so indoor air is rarely much cleaner without a filter.`,
-    wardKicker: 'DELHI WARD FORECAST · GRAPH NEURAL NETWORK', wardTitle: name => `AQI outlook for ${name}`, wardBody: km => `Nearest of 289 wards (~${km} km). Range = 80% conformal interval.`, wardNote: 'WardGraphTransformer trained on CPCB stations (mansi724/PROJECT-AQI), run hourly on CAMS + weather.',
     newChat: 'New chat',
     modes: { citizen: 'Citizen', gov: 'Government' }, modeLabel: 'View',
     stTitle: 'Monitors around you', stSub: 'Tap a monitor to zoom to it. The number on each pin matches the list.', stNearest: 'Nearest', stAvg: 'Recent average', stFresh: 'Reporting now',
@@ -107,10 +106,9 @@ const UI = {
       more: { kicker: 'YOUR SAANS', title: () => 'More', desc: 'Keep the essentials close and your preferences yours.' } } },
   hi: { bandSuffix: 'CPCB PM2.5 श्रेणी · संकेतात्मक', guidanceKicker: 'आज के लिए सलाह', forWho: 'क्या करें', cpcbSays: 'CPCB के अनुसार स्वास्थ्य प्रभाव', cleanest: 'अगले 24 घंटों में सबसे साफ़ समय (मॉडल)',
     editProfile: 'व्यक्ति या बीमारी बदलें', condTag: label => `आपकी स्थिति · ${label}`,
-    aqiCircle: 'AQI · संकेतात्मक', aqiMostly: name => `मुख्यतः ${name}`, aqiNote: 'संकेतात्मक AQI (मॉडल डेटा पर CPCB तरीका), आधिकारिक CPCB AQI नहीं।', outlookL: h => `${h} घंटे में`,
+    aqiCircle: 'AQI · संकेतात्मक', aqiMostly: name => `मुख्यतः ${name}`, aqiNote: 'संकेतात्मक AQI (मॉडल डेटा पर CPCB तरीका), आधिकारिक CPCB AQI नहीं।',
     tipAt: (t, pm, aqi) => `<b>${t}</b>PM2.5 ${pm} µg/m³${aqi == null ? '' : ` · AQI ${aqi}`}`, spike: 'उछाल', dip: 'गिरावट', explainTitle: 'रेखा क्यों उछलती है', explainLoading: 'असामान्य घंटे खोज रहे हैं…', explainNone: 'इस अवधि में कोई असामान्य उछाल या गिरावट नहीं।', viaBedrockShort: 'Amazon Bedrock द्वारा व्याख्या', viaGeminiShort: 'Gemini द्वारा व्याख्या', viaRulesShort: 'मौसम डेटा से व्याख्या',
     indoorKicker: 'घर के अंदर की हवा', indoorTitle: 'घर में साफ़ हवा', indoorIntro: pm => `बाहर PM2.5 ~${pm} µg/m³ है। खिड़कियाँ बंद होने पर भी इसका कुछ हिस्सा अंदर आता है, इसलिए फ़िल्टर के बिना अंदर की हवा ज़्यादा साफ़ नहीं होती।`,
-    wardKicker: 'दिल्ली वार्ड पूर्वानुमान · ग्राफ़ न्यूरल नेटवर्क', wardTitle: name => `${name} के लिए AQI अनुमान`, wardBody: km => `289 वार्डों में सबसे पास (~${km} km)। सीमा = 80% कॉन्फ़ॉर्मल अंतराल।`, wardNote: 'CPCB स्टेशनों पर प्रशिक्षित WardGraphTransformer (mansi724/PROJECT-AQI), हर घंटे CAMS + मौसम पर चलता है।',
     newChat: 'नई बातचीत',
     modes: { citizen: 'नागरिक', gov: 'सरकार' }, modeLabel: 'दृश्य',
     stTitle: 'आपके आसपास के मॉनिटर', stSub: 'किसी मॉनिटर पर टैप करें, नक्शा वहाँ ज़ूम होगा। पिन का नंबर सूची से मेल खाता है।', stNearest: 'सबसे पास', stAvg: 'हाल का औसत', stFresh: 'अभी रिपोर्ट कर रहे',
@@ -188,9 +186,6 @@ function buildPages() {
   today.querySelector('.briefing').setAttribute('aria-live', 'polite');
   const indoorCard = document.createElement('article');
   indoorCard.className = 'card indoor-card';
-  const wardCard = document.createElement('article');
-  wardCard.className = 'card ward-card';
-  wardCard.hidden = true;
   const windCard = document.createElement('article');
   windCard.className = 'card wind-card';
   const advisoryCard = document.createElement('article');
@@ -208,7 +203,7 @@ function buildPages() {
 
   grid.append(
     today,
-    page('overview', div('air-primary', air, forecast), wardCard, historyCard),
+    page('overview', div('air-primary', air, forecast), historyCard),
     page('airspace', div('airspace-stage', map, stations)),
     page('health', adviceCard, div('health-body'), indoorCard, div('health-dose')),
     page('trip', div('trip-root')),
@@ -501,27 +496,6 @@ async function loadHistory() {
   chartTip(svg, rows.length, i => tipFor(i, byDate.get(rows[i].date)), true);
 }
 
-// Overview: Delhi ward GNN forecast (hourly container Lambda); shown only when you are within 6 km of a ward centroid.
-let wardToken = 0;
-async function loadWard() {
-  const card = document.querySelector('.ward-card');
-  const token = ++wardToken;
-  card.hidden = true;
-  if (!API_BASE || !inNcr()) return;
-  try {
-    const result = await fetch(`${API_BASE}/v1/ward-forecast?lat=${encodeURIComponent(selectedLocation.latitude)}&lon=${encodeURIComponent(selectedLocation.longitude)}`);
-    const data = await result.json();
-    if (token !== wardToken || data.state !== 'available') return;
-    if (!data.nearest) return;
-    const copy = ui(), lang = langKey(), w = data.nearest;
-    const cells = Object.entries(w.aqi).map(([h, [low, mid, high]]) => {
-      const band = AQI_BANDS.find(b => mid <= b[0]) || AQI_BANDS.at(-1);
-      return `<div class="ward-cell" style="--band:${BANDS[band[1]][1]}"><small>${copy.outlookL(h)}</small><b>${mid}</b><span>${low}–${high}</span><small>${BANDS[band[1]][lang === 'hi' ? 3 : 2]}</small></div>`;
-    }).join('');
-    card.innerHTML = `<div class="section-kicker">${copy.wardKicker}</div><h3>${safeText(copy.wardTitle(w.name))}</h3><p class="muted">${safeText(copy.wardBody(w.distanceKm))}</p><div class="ward-grid">${cells}</div><small class="muted">${copy.wardNote}${data.generatedAt ? ` · ${safeText(String(data.generatedAt).slice(0, 16).replace('T', ' '))} UTC` : ''}</small>`;
-    card.hidden = false;
-  } catch { /* the card stays hidden */ }
-}
 // Government advisory broadcast (simulated): the government view sends one for its area; citizens nearby see it on Today.
 const ADV_UI = {
   en: { kicker: 'ALERT BROADCAST · SIMULATED', title: p => 'Send an advisory to ' + p, loading: 'Checking subscribers…',
@@ -865,8 +839,7 @@ function renderBriefing() {
     // Circle shows the indicative AQI; PM2.5 only when the API could not compute one.
     const circle = aqi ? `<span class="headline-pm" style="--band:${aqi.band.color}" title="${safeText(copy.aqiNote)}"><b>${aqi.value}</b><small>${copy.aqiCircle}</small><small class="aqi-dom">${safeText(copy.aqiMostly(aqi.dominantName || ''))}</small></span>`
       : `<span class="headline-pm"><b>${Number.isFinite(pm) ? Math.round(pm) : '—'}</b><small>PM2.5 µg/m³</small></span>`;
-    const outlook = aqi?.outlook?.length ? `<div class="aqi-outlook">${aqi.outlook.map(o => `<span style="--band:${o.band.color}"><small>${copy.outlookL(o.hours)}</small><b>${o.aqi}</b><small>${o.low}–${o.high}</small></span>`).join('')}</div>` : '';
-    headline.innerHTML = `<div class="headline-card" style="--band:${(aqi?.band || g?.band)?.color || '#9aa'}"><div class="headline-main">${circle}<div><p class="headline-title">${g ? safeText(copy.headline((aqi?.band || g.band).label[lang], selectedLocation.name)) : copy.noEstimate}</p>${g ? `<p class="headline-impact">${safeText((aqi?.band || g.band).impact[lang])}</p><small class="headline-note">${aqi ? copy.aqiNote : copy.bandSuffix}</small>` : ''}${outlook}</div></div>${persona}</div>`;
+    headline.innerHTML = `<div class="headline-card" style="--band:${(aqi?.band || g?.band)?.color || '#9aa'}"><div class="headline-main">${circle}<div><p class="headline-title">${g ? safeText(copy.headline((aqi?.band || g.band).label[lang], selectedLocation.name)) : copy.noEstimate}</p>${g ? `<p class="headline-impact">${safeText((aqi?.band || g.band).impact[lang])}</p><small class="headline-note">${aqi ? copy.aqiNote : copy.bandSuffix}</small>` : ''}</div></div>${persona}</div>`;
     feed.innerHTML = briefingItems(data).map(item => `<div class="alert alert-${item.tone}"><span class="alert-icon" aria-hidden="true">${item.icon}</span><div>${item.tag ? `<small class="alert-tag">${safeText(item.tag)}</small>` : ''}<b>${safeText(item.title)}</b>${item.body ? `<p>${safeText(item.body)}</p>` : ''}</div></div>`).join('') + `<a class="alert-more" href="#health">${copy.seeGuidance}</a>`;
   }
   headline.querySelector('.persona-chip').addEventListener('click', openProfile);
@@ -948,7 +921,6 @@ function render(data) {
   renderStations(data.stations);
   renderCoverageMap(data.stations);
   renderForecast(data.forecast);
-  loadWard();
   loadAdvisories();
   renderPersonal();
   renderWeather();

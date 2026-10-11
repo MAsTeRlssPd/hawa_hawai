@@ -1,11 +1,9 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { SNSClient } from '@aws-sdk/client-sns';
-import { readFile } from 'node:fs/promises';
 import { Tracer } from '@aws-lambda-powertools/tracer';
-import { guidanceFor, PROFILES, CONDITIONS, POLLUTANT_KEYS, pollutantsFor, aqiSeries, aqiBandFor, CONFORMAL_DELTA, POLLUTANT_NAMES } from './guidance.mjs';
+import { guidanceFor, PROFILES, CONDITIONS, POLLUTANT_KEYS, pollutantsFor, aqiSeries, aqiBandFor, POLLUTANT_NAMES } from './guidance.mjs';
 import { answer, explainSeries, cleanAbout, llmConfigured, keys } from './assistant.mjs';
 import { planTrip, MAX_TRIP_KM, STATION_KM } from './routes.mjs';
 import { subscribe, listSubscribers, alertOne, sendAdvisory, readAdvisories, advisoriesNear, countSubscribersNear, advisoryText, ADVISORY_KM } from './alerts.mjs';
@@ -15,7 +13,6 @@ import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFire
 const tracer = new Tracer({ serviceName: 'saans-api' });
 const ddb = DynamoDBDocumentClient.from(tracer.captureAWSv3Client(new DynamoDBClient({})), { marshallOptions: { removeUndefinedValues: true } });
 const ssm = tracer.captureAWSv3Client(new SSMClient({}));
-const s3 = tracer.captureAWSv3Client(new S3Client({}));
 const sns = tracer.captureAWSv3Client(new SNSClient({}));
 const alertsEnv = () => ({ ddb, sns, table: process.env.SUBSCRIBERS_TABLE, topic: process.env.ALERTS_TOPIC, cacheTable: process.env.CACHE_TABLE, getAir });
 const TABLE = process.env.CACHE_TABLE;
@@ -172,16 +169,6 @@ async function cached(route, key, seconds, fetcher, memoryOnly = false) {
   return payload;
 }
 
-// Delhi ward GNN forecast, written hourly to S3 by the gnn/ container Lambda (a local file in dev).
-async function getWardForecast() {
-  return cached('wards', 'wards:v1', 600, async () => {
-    if (process.env.WARD_FORECAST_FILE) return JSON.parse(await readFile(process.env.WARD_FORECAST_FILE, 'utf8'));
-    if (!process.env.FORECAST_BUCKET) return null;
-    const object = await s3.send(new GetObjectCommand({ Bucket: process.env.FORECAST_BUCKET, Key: 'ward-forecast/latest.json' }));
-    return JSON.parse(await object.Body.transformToString());
-  }, true);
-}
-
 function parseCoords(lat, lon) {
   const latitude = Number(lat), longitude = Number(lon);
   if (lat === undefined || lat === '' || lon === undefined || lon === '' || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
@@ -237,11 +224,7 @@ export async function getAir({ latitude, longitude }) {
   const aqiNow = aqiHours[nowIndex];
   const aqi = aqiNow?.aqi == null ? null : { value: aqiNow.aqi, band: aqiBandFor(aqiNow.aqi), dominant: aqiNow.dominant, dominantName: POLLUTANT_NAMES[aqiNow.dominant], subIndices: aqiNow.subIndices,
     method: pmScale ? 'cpcb_rolling_station_scaled_cams' : 'cpcb_rolling_bias_corrected_cams',
-    outlook: [24, 48, 72].map(h => aqiHours[nowIndex + h]).map((p, k) => {
-      const h = [24, 48, 72][k];
-      return p?.aqi == null ? null : { hours: h, time: p.time, aqi: p.aqi, low: Math.max(0, Math.round(p.aqi - CONFORMAL_DELTA[h])), high: Math.round(p.aqi + CONFORMAL_DELTA[h]), band: aqiBandFor(p.aqi), dominant: p.dominant };
-    }).filter(Boolean),
-    note: 'Indicative AQI: CPCB method (24 h averages, 8 h for O3/CO, max sub-index) on CAMS model data, PM bias-corrected with CPCB-anchored monthly factors or nearby monitors. Outlook ranges are the 80% conformal widths calibrated for the Delhi ward model. Not the official CPCB AQI.' };
+    note: 'Indicative AQI: CPCB method (24 h averages, 8 h for O3/CO, max sub-index) on CAMS model data, PM bias-corrected with CPCB-anchored monthly factors or nearby monitors. Not the official CPCB AQI.' };
   const payload = { location: { latitude, longitude, timezone: forecast.timezone || 'UTC' },
     observedAt: new Date().toISOString(), estimate, stations,
     forecast: future.slice(0, 48).map((p, k) => ({ ...p, aqi: aqiHours[nowIndex + k]?.aqi ?? null })),
@@ -378,17 +361,6 @@ async function route(event) {
       const fires = await getFires(days);
       return reply(200, fires, fires.state === 'available' ? { 'cache-control': 'public, max-age=600' } : {});
     } catch (error) { console.error('Fires failed', error.message); return unavailable(); }
-  }
-
-  if (path.endsWith('/ward-forecast')) {
-    try {
-      const data = await getWardForecast();
-      if (!data) return reply(200, { state: 'not_configured' });
-      const near = parseCoords(query.lat, query.lon);
-      // Only answer "your ward" inside Delhi: the nearest ward centroid must be within 6 km.
-      const nearest = near && data.wards.map(w => ({ ...w, distanceKm: Math.round(haversineKm(near, { latitude: w.lat, longitude: w.lon }) * 10) / 10 })).sort((a, b) => a.distanceKm - b.distanceKm)[0];
-      return reply(200, { state: 'available', ...data, nearest: nearest?.distanceKm <= 6 ? nearest : null }, { 'cache-control': 'public, max-age=600' });
-    } catch (error) { console.error('Ward forecast failed', error.name); return reply(200, { state: 'temporarily_unavailable' }); }
   }
 
   const coords = parseCoords(query.lat, query.lon);

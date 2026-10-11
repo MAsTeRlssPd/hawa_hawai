@@ -140,8 +140,6 @@ const PM25_FACTOR = [1.30, 1.10, 0.65, 0.65, 0.65, 0.75, 1.00, 1.00, 1.00, 1.10,
 const PM10_FACTOR = [1.50, 1.40, 0.45, 0.45, 0.45, 0.60, 0.90, 0.90, 0.90, 0.95, 1.40, 1.70];
 const AQI_TOP = { pm2_5: 500, pm10: 600, nitrogen_dioxide: 600, ozone: 1000, carbon_monoxide: 50, sulphur_dioxide: 2000 };
 const AQI_STEPS = [0, 50, 100, 200, 300, 400, 500];
-// Conformal 80% half-widths (AQI points) from the ward GNN's calibration (models/checkpoints/conformal.json).
-export const CONFORMAL_DELTA = { 24: 19.03, 48: 26.97, 72: 30.84 };
 
 // Piecewise-linear sub-index, clamped at 500 like np.interp.
 export function subIndex(key, conc) {

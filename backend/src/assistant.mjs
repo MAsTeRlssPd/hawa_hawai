@@ -51,7 +51,7 @@ function facts(air, place) {
     estimateMethod: air.estimate?.method,
     recentStations: air.estimate?.stationCount ?? 0,
     band: air.guidance?.band ? { name: air.guidance.band.label.en, index: air.guidance.band.index, cpcbImpact: air.guidance.band.impact.en } : null,
-    indicativeAqi: air.aqi ? { value: air.aqi.value, band: air.aqi.band.label.en, dominant: air.aqi.dominantName, outlook: air.aqi.outlook?.map(o => ({ hours: o.hours, aqi: o.aqi, range: [o.low, o.high] })) } : null,
+    indicativeAqi: air.aqi ? { value: air.aqi.value, band: air.aqi.band.label.en, dominant: air.aqi.dominantName } : null,
     next24hModel: future.length ? { min: Math.round(Math.min(...future.map(p => p.pm2_5))), max: Math.round(Math.max(...future.map(p => p.pm2_5))), cleanestDaytimeHour: cleanest?.time ?? null } : null,
     wind: air.weather ? { speedKmh: air.weather.speedKmh, from: air.weather.fromCompass } : null,
     weather: air.weather ? { temperatureC: air.weather.temperatureC, humidityPct: air.weather.humidity, boundaryLayerM: air.weather.blhM, ventilationIndex: air.weather.ventilation?.index, ventilation: air.weather.ventilation?.label } : null,
@@ -82,8 +82,7 @@ export function ruleAnswer(question, air, { profile, lang, place, conditions = [
   const now = (hi ? `${f.place} में अभी PM2.5 लगभग ${pm} µg/m³ है — CPCB श्रेणी के अनुसार "${band}" (संकेतात्मक)।` : `PM2.5 near ${f.place} is about ${pm} µg/m³ right now — "${band}" on CPCB PM2.5 breakpoints (indicative).`) + aqi;
   const outlook = f.next24hModel ? (hi ? ` अगले 24 घंटों में मॉडल ${f.next24hModel.min}–${f.next24hModel.max} µg/m³ दिखाता है।` : ` The model expects ${f.next24hModel.min}–${f.next24hModel.max} µg/m³ over the next 24 hours.`) : '';
   if (/\baqi\b|index|सूचकांक/.test(q) && f.indicativeAqi)
-    return (hi ? `संकेतात्मक AQI लगभग ${f.indicativeAqi.value} है (${f.indicativeAqi.band}), मुख्य प्रदूषक ${f.indicativeAqi.dominant}। यह CPCB पद्धति (24 घंटे औसत) से CAMS मॉडल पर निकाला गया है, आधिकारिक AQI नहीं।` : `Indicative AQI is about ${f.indicativeAqi.value} (${f.indicativeAqi.band}), driven by ${f.indicativeAqi.dominant}. It follows the CPCB method (24-hour averages, 8 h for O₃/CO) on bias-corrected CAMS model data — not the official AQI.`)
-      + (f.indicativeAqi.outlook?.length ? (hi ? ` अगले दिनों: ${f.indicativeAqi.outlook.map(o => `${o.hours}h ≈ ${o.aqi}`).join(', ')}।` : ` Outlook: ${f.indicativeAqi.outlook.map(o => `${o.hours} h ≈ ${o.aqi} (80% range ${o.range[0]}–${o.range[1]})`).join(', ')}.`) : '');
+    return (hi ? `संकेतात्मक AQI लगभग ${f.indicativeAqi.value} है (${f.indicativeAqi.band}), मुख्य प्रदूषक ${f.indicativeAqi.dominant}। यह CPCB पद्धति (24 घंटे औसत) से CAMS मॉडल पर निकाला गया है, आधिकारिक AQI नहीं।` : `Indicative AQI is about ${f.indicativeAqi.value} (${f.indicativeAqi.band}), driven by ${f.indicativeAqi.dominant}. It follows the CPCB method (24-hour averages, 8 h for O₃/CO) on bias-corrected CAMS model data — not the official AQI.`);
   if (/pm ?2\.?5|what is|meaning|मतलब|क्या है/.test(q))
     return (hi ? 'PM2.5 हवा में 2.5 माइक्रोमीटर या उससे छोटे कण हैं, जो फेफड़ों में गहराई तक जा सकते हैं। ' : 'PM2.5 means airborne particles 2.5 micrometres or smaller — small enough to reach deep into the lungs. ') + now;
   if (/when|best time|what time|cleanest|walk|run|jog|कब|समय|सैर/.test(q) && f.next24hModel?.cleanestDaytimeHour)

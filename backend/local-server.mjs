@@ -14,7 +14,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 
 createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  if (['/health', '/v1/air', '/v1/ask', '/v1/fires', '/v1/history', '/v1/geocode', '/v1/explain', '/v1/ward-forecast', '/v1/route', '/v1/alerts', '/v1/advisory'].includes(url.pathname)) {
+  if (['/health', '/v1/air', '/v1/ask', '/v1/fires', '/v1/history', '/v1/geocode', '/v1/explain', '/v1/route', '/v1/alerts', '/v1/advisory'].includes(url.pathname)) {
     let body = '';
     for await (const chunk of req) if ((body += chunk).length > 10000) return res.writeHead(413).end();
     const out = await handler({ rawPath: url.pathname, requestContext: { http: { method: req.method } }, queryStringParameters: Object.fromEntries(url.searchParams), body });

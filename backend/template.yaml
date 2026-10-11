@@ -45,7 +45,6 @@ Globals:
         GEMINI_MODEL_ID: !Ref GeminiModelId
         POWERTOOLS_SERVICE_NAME: saans-api
         BEDROCK_MODEL_ID: !Ref BedrockModelId
-        FORECAST_BUCKET: !Ref ForecastBucket
         ALERTS_TOPIC: !Ref AlertsTopic
         SUBSCRIBERS_TABLE: !Ref AlertSubscribers
         APP_URL: !Ref AppUrl
@@ -157,9 +156,6 @@ Resources:
               Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
             # Cross-region inference profiles route to foundation models in other regions of the same geography.
             - Effect: Allow
-              Action: [s3:GetObject]
-              Resource: !Sub '${ForecastBucket.Arn}/ward-forecast/*'
-            - Effect: Allow
               Action: [bedrock:InvokeModel]
               Resource:
                 - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*'
@@ -206,12 +202,6 @@ Resources:
           Properties:
             ApiId: !Ref AirApi
             Path: /v1/explain
-            Method: GET
-        WardForecast:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref AirApi
-            Path: /v1/ward-forecast
             Method: GET
         Route:
           Type: HttpApi
