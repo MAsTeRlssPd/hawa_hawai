@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { bandFor, actionsFor, compass, pollutantsFor, PROFILES, CONDITIONS, subIndex, aqiBandFor, aqiSeries } from './src/guidance.mjs';
 import { flagOutliers, makeEstimate } from './src/handler.mjs';
-import { ruleAnswer, chatTurns, findAnomalies, anomalyNote, cleanAbout } from './src/assistant.mjs';
+import { ruleAnswer, chatTurns, findAnomalies, anomalyNote, cleanAbout, exposurePriorities } from './src/assistant.mjs';
 import { samplePath, scoreTrip, firesNear, blendStations } from './src/routes.mjs';
 import { validEmail, subscriberId, shouldSend, alertMessage, alertOne, advisoryText, advisoriesNear, sendAdvisory } from './src/alerts.mjs';
 import { ventilation, parseFiresCsv, recentFires,stateOf, summariseFires, upwindFires, bearing, backtest, pearson, historyCsv, parseGeocode, parsePlaces } from './src/sources.mjs';
@@ -99,6 +99,12 @@ assert.deepEqual(cleanAbout({ age: 'senior', work: 'hacker', floor: 'ground', ne
 assert.equal(cleanAbout('x'), null);
 assert.match(ruleAnswer('How do I keep my home air clean?', air, { profile: 'general', lang: 'en', place: 'Delhi', about: { fuel: 'solid', near: ['road'], floor: 'low' } }), /wood, coal.*low floor near a main road/);
 assert.ok(CONDITIONS.includes('eye') && CONDITIONS.includes('sinus'));
+// Personal priorities: indoor smoke first, then cooking fuel, work, home surroundings; at most three; none without answers
+const prio = exposurePriorities(cleanAbout({ smoker: true, fuel: 'solid', work: 'delivery', near: ['construction'], floor: 'high' }));
+assert.deepEqual(prio.map(p => p.split(':')[0]), ['someone smokes indoors', 'cooks on wood, coal or dung', 'riding in traffic']);
+assert.match(exposurePriorities({ near: ['road'], floor: 'ground' })[0], /^low floor by a main road/);
+assert.deepEqual(exposurePriorities({ near: ['road'], floor: 'high' }), []);
+assert.deepEqual(exposurePriorities(null), []);
 
 // Trip planner: even samples by distance, departure scoring, fires near the path
 const line = samplePath([[77, 28], [77, 28.5], [77, 29]], 3);
