@@ -8,7 +8,7 @@ import { Tracer } from '@aws-lambda-powertools/tracer';
 import { guidanceFor, PROFILES, CONDITIONS, POLLUTANT_KEYS, pollutantsFor, aqiSeries, aqiBandFor, CONFORMAL_DELTA, POLLUTANT_NAMES } from './guidance.mjs';
 import { answer, explainSeries, cleanAbout, llmConfigured } from './assistant.mjs';
 import { planTrip, MAX_TRIP_KM } from './routes.mjs';
-import { subscribe, runHourly } from './alerts.mjs';
+import { subscribe, listSubscribers, alertOne } from './alerts.mjs';
 import { jsonFetch, haversineKm, metric, fetchWeather, fetchFires, summariseFires, upwindFires, INDIA_BBOX, fetchHistory, historyCsv, geocode } from './sources.mjs';
 
 // X-Ray: AWS SDK calls and outbound fetch() show up as subsegments; disabled automatically outside Lambda.
@@ -382,12 +382,13 @@ async function route(event) {
   }
 }
 
-// EventBridge Scheduler entry point (AlertsFunction): one pass over every subscriber.
-export const alerts = async () => {
-  const stats = await runHourly(alertsEnv());
-  for (const [name, value] of Object.entries(stats)) metric(`Alerts_${name}`, value, 'Count', { Service: 'saans-alerts' });
-  console.log(JSON.stringify({ alerts: stats }));
-  return stats;
+// AlertsFunction, called by the alerts state machine: { action: 'list' } -> { emails }, { action: 'send', email, now } -> { email, result }.
+export const alerts = async event => {
+  if (event?.action === 'list') return { emails: await listSubscribers(alertsEnv()) };
+  if (event?.action !== 'send' || typeof event.email !== 'string') throw new Error('Unknown alerts action');
+  const result = await alertOne(alertsEnv(), event.email, event.now ? new Date(event.now) : new Date());
+  metric(`Alerts_${result}`, 1, 'Count', { Service: 'saans-alerts' });
+  return { email: event.email, result };
 };
 
 // Manual Powertools pattern: annotations need a subsegment because the Lambda facade segment is read-only.

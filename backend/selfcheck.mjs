@@ -4,7 +4,7 @@ import { bandFor, actionsFor, compass, pollutantsFor, PROFILES, CONDITIONS, subI
 import { flagOutliers, makeEstimate } from './src/handler.mjs';
 import { ruleAnswer, chatTurns, findAnomalies, anomalyNote, cleanAbout } from './src/assistant.mjs';
 import { samplePath, scoreTrip, firesNear } from './src/routes.mjs';
-import { validEmail, subscriberId, shouldSend, alertMessage } from './src/alerts.mjs';
+import { validEmail, subscriberId, shouldSend, alertMessage, alertOne } from './src/alerts.mjs';
 import { ventilation, parseFiresCsv, recentFires,stateOf, summariseFires, upwindFires, bearing, backtest, pearson, historyCsv, parseGeocode } from './src/sources.mjs';
 
 assert.deepEqual([0, 30, 30.1, 60, 90, 120, 250, 251].map(pm => bandFor(pm).key), ['good', 'good', 'satisfactory', 'satisfactory', 'moderate', 'poor', 'very_poor', 'severe']);
@@ -123,4 +123,19 @@ const msg = alertMessage({ place: 'Lajpat Nagar, दिल्ली', profile: '
 assert.equal(msg.subject, 'Saans: AQI 212 Poor in Lajpat Nagar,');
 assert.match(msg.text, /Getting worse.*\n.*Cleanest stretch.*19:00 \(AQI ~180\)[\s\S]*inhaler[\s\S]*7 farm or forest fires/);
 assert.match(alertMessage({ lang: 'hi' }, alertAir).text, /क्या करें/);
+
+// alertOne (one Step Functions Map item): stub clients keyed by command name
+const sent = [];
+const stubEnv = (item, attrs, failUpdate = false) => ({ table: 't', topic: 'arn:topic', getAir: async () => ({ payload: alertAir }),
+  ddb: { send: async c => { const n = c.constructor.name; sent.push(n);
+    if (n === 'GetCommand') return { Item: item };
+    if (n === 'UpdateCommand' && failUpdate) throw new Error('throttled');
+    return {}; } },
+  sns: { send: async c => { const n = c.constructor.name; sent.push(n); return n === 'GetSubscriptionAttributesCommand' ? attrs : {}; } } });
+const subItem = { email: 'a@b.com', id: 'x', subscriptionArn: 'arn:sub', freq: 'hourly', lastBand: 3, latitude: 28.6, longitude: 77.2 };
+assert.equal(await alertOne(stubEnv(undefined), 'gone@b.com', noon), 'removed');
+assert.equal(await alertOne(stubEnv(subItem, { Attributes: { PendingConfirmation: 'true' } }), 'a@b.com', noon), 'pending');
+assert.equal(await alertOne(stubEnv(subItem, { Attributes: {} }), 'a@b.com', night), 'skipped');
+assert.equal(await alertOne(stubEnv(subItem, { Attributes: {} }, true), 'a@b.com', noon), 'sent'); // recorded-or-not, no throw after Publish
+assert.ok(sent.includes('PublishCommand'));
 console.log('selfcheck ok');

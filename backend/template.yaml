@@ -211,7 +211,7 @@ Resources:
             ApiId: !Ref AirApi
             Path: /v1/alerts
             Method: POST
-  # EventBridge Scheduler, every hour at :05 (after the CAMS/OpenAQ hour turns over).
+  # Runs one step of the alerts state machine below: list subscribers, or alert one subscriber.
   AlertsFunction:
     Type: AWS::Serverless::Function
     DependsOn: AlertsLogGroup
@@ -219,7 +219,7 @@ Resources:
       CodeUri: src/
       Handler: handler.alerts
       FunctionName: !Sub '${AWS::StackName}-alerts'
-      Timeout: 300
+      Timeout: 60
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref AirCache
@@ -237,12 +237,85 @@ Resources:
             - Effect: Allow
               Action: [sns:Publish, sns:GetSubscriptionAttributes]
               Resource: [!Ref AlertsTopic, !Sub '${AlertsTopic}:*']
+  # Step Functions, every hour at :05 (after the CAMS/OpenAQ hour turns over): list subscribers, then one task per
+  # subscriber with retries. A failure is caught for that person only and shows in the execution graph.
+  AlertsStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub '${AWS::StackName}-alerts'
+      Type: STANDARD
+      Tracing:
+        Enabled: true
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref AlertsFunction
       Events:
         Hourly:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(5 * * * ? *)
             ScheduleExpressionTimezone: Asia/Kolkata
+      DefinitionSubstitutions:
+        AlertsFunctionArn: !GetAtt AlertsFunction.Arn
+      Definition:
+        Comment: Saans hourly email alerts
+        StartAt: ListSubscribers
+        States:
+          ListSubscribers:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: ${AlertsFunctionArn}
+              Payload:
+                action: list
+            OutputPath: $.Payload
+            Retry:
+              - ErrorEquals: [Lambda.ServiceException, Lambda.AWSLambdaException, Lambda.SdkClientException, Lambda.TooManyRequestsException]
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Next: AlertEachSubscriber
+          AlertEachSubscriber:
+            Type: Map
+            ItemsPath: $.emails
+            # New accounts have 10 concurrent Lambda executions; leave room for the API.
+            MaxConcurrency: 3
+            ItemSelector:
+              email.$: $.Map.Item.Value
+              now.$: $.Execution.StartTime
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: SendAlert
+              States:
+                SendAlert:
+                  Type: Task
+                  Resource: arn:aws:states:::lambda:invoke
+                  Parameters:
+                    FunctionName: ${AlertsFunctionArn}
+                    Payload:
+                      action: send
+                      email.$: $.email
+                      now.$: $.now
+                  OutputPath: $.Payload
+                  Retry:
+                    - ErrorEquals: [States.ALL]
+                      IntervalSeconds: 5
+                      MaxAttempts: 2
+                      BackoffRate: 3
+                  Catch:
+                    - ErrorEquals: [States.ALL]
+                      ResultPath: $.error
+                      Next: AlertFailed
+                  End: true
+                AlertFailed:
+                  Type: Pass
+                  Parameters:
+                    email.$: $.email
+                    result: failed
+                    error.$: $.error.Error
+                  End: true
+            End: true
   AlertsLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -377,3 +450,5 @@ Outputs:
     Value: !Ref AuditBucket
   AlertsTopicArn:
     Value: !Ref AlertsTopic
+  AlertsStateMachineUrl:
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/states/home?region=${AWS::Region}#/statemachines/view/${AlertsStateMachine}'
